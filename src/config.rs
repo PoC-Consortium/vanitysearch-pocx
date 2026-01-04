@@ -5,7 +5,7 @@ use clap::Parser;
 #[command(about = "PoCX Bech32 Vanity Address Generator")]
 pub struct Config {
     /// Prefix to search (e.g., "pocx1qtest")
-    #[arg(short, long, required = true)]
+    #[arg(short, long, required_unless_present = "list_gpus")]
     pub prefix: Vec<String>,
 
     /// Force specific backend: "cuda" or "opencl"
