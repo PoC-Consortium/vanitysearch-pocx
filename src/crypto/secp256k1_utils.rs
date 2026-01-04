@@ -87,9 +87,16 @@ impl Crypto {
         let mut k = BigUint::from_bytes_be(base_key);
         
         // Apply increment
+        // When increment is negative, we need to subtract: k = k - |increment| (mod n)
+        // When increment is positive, we add: k = k + increment (mod n)
         if increment < 0 {
-            k = (k + BigUint::from(-increment as u32)) % &n;
-            k = &n - k;
+            let abs_incr = BigUint::from((-increment) as u32);
+            if k >= abs_incr {
+                k = (k - &abs_incr) % &n;
+            } else {
+                // Handle underflow: k - abs_incr + n (mod n)
+                k = (&n - (&abs_incr - k) % &n) % &n;
+            }
         } else {
             k = (k + BigUint::from(increment as u32)) % &n;
         }

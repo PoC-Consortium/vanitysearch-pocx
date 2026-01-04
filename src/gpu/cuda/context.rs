@@ -181,9 +181,13 @@ fn mark_prefix_entries(table: &mut [u16], prefix_data: &[u8]) {
     let bits = prefix_data.len() * 5;
     
     if bits >= 16 {
-        let prefix16 = (prefix_data[0] as u16) << 11 
-                     | (prefix_data[1] as u16) << 6
-                     | (prefix_data[2] as u16) << 1;
+        // Safe indexing with bounds check
+        let b0 = prefix_data.first().copied().unwrap_or(0);
+        let b1 = prefix_data.get(1).copied().unwrap_or(0);
+        let b2 = prefix_data.get(2).copied().unwrap_or(0);
+        let prefix16 = (b0 as u16) << 11 
+                     | (b1 as u16) << 6
+                     | (b2 as u16) << 1;
         table[prefix16 as usize] = 1;
     } else {
         let num_entries = 1 << (16 - bits);
