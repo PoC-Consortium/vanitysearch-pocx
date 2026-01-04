@@ -1,0 +1,51 @@
+[package]
+name = "pocx-vanity"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Crypto
+secp256k1 = { version = "0.28", features = ["rand"] }
+sha2 = "0.10"
+ripemd = "0.1"
+bech32 = "0.9"
+bs58 = "0.5"
+hex = "0.4"
+rand = "0.8"
+num-bigint = "0.4"
+num-traits = "0.2"
+
+# GPU - CUDA
+cudarc = { version = "0.10", optional = true }
+
+# GPU - OpenCL
+opencl3 = { version = "0.9", optional = true }
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Utility
+thiserror = "1"
+anyhow = "1"
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = []
+cuda = ["cudarc"]
+opencl = ["opencl3"]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[lib]
+name = "pocx_vanity"
+path = "src/lib.rs"
