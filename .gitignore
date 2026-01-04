@@ -1,0 +1,29 @@
+# Generated files
+/target/
+Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+
+# Debug files
+*.pdb
+*.dSYM/
+
+# Test artifacts
+*.profraw
+*.profdata
