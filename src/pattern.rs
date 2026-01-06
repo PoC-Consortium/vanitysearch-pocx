@@ -33,33 +33,48 @@ impl FastPrefixMatcher {
         let has_wildcards = chars.iter().any(|&c| c == '?' || c == '*');
 
         if has_wildcards {
-            // Find prefix before first wildcard
-            let end = chars
-                .iter()
-                .position(|&c| c == '?' || c == '*')
-                .unwrap_or(chars.len());
-            let prefix_chars: Vec<char> = chars[..end].to_vec();
+            // Find the longest contiguous concrete segment (no wildcards)
+            // We need to find a good prefix to filter on, even if pattern starts with *
+            // E.g., "q*ev?seed*" should use "ev" or "seed" as filter prefix
 
-            // Skip witness version 'q' at position 0
-            let prefix_5bit: Vec<u8> = if prefix_chars.len() > 1 {
-                prefix_chars[1..]
-                    .iter()
-                    .filter_map(|&c| {
-                        let idx = c as usize;
-                        if idx < 128 && BECH32_REV[idx] >= 0 {
-                            Some(BECH32_REV[idx] as u8)
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+            // First, try prefix before first wildcard (skip witness version 'q')
+            let prefix_end = chars
+                .iter()
+                .skip(1) // Skip 'q'
+                .position(|&c| c == '?' || c == '*')
+                .map(|p| p + 1) // Adjust for skip
+                .unwrap_or(chars.len());
+
+            let prefix_chars: Vec<char> = if prefix_end > 1 {
+                chars[1..prefix_end].to_vec()
             } else {
                 vec![]
             };
 
+            let prefix_5bit: Vec<u8> = prefix_chars
+                .iter()
+                .filter_map(|&c| {
+                    let idx = c as usize;
+                    if idx < 128 && BECH32_REV[idx] >= 0 {
+                        Some(BECH32_REV[idx] as u8)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Store info about where the prefix starts in the pattern
+            // (for patterns like "q*evlseed", we can't use fast hash160 matching
+            // because the segment isn't at a fixed position)
+            let prefix_at_start = prefix_end > 1;
+
             Self {
-                prefix_len: prefix_5bit.len(),
-                prefix_5bit,
+                prefix_len: if prefix_at_start {
+                    prefix_5bit.len()
+                } else {
+                    0
+                },
+                prefix_5bit: if prefix_at_start { prefix_5bit } else { vec![] },
                 has_wildcards,
             }
         } else {

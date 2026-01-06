@@ -1,79 +1,120 @@
 //! Output formatting for vanity search results
 
 use crate::search::Match;
-use crate::wif::{encode_wif, create_descriptor};
+use crate::wif::{create_descriptor, encode_wif};
+
+/// Network info for output formatting
+#[derive(Debug, Clone)]
+pub struct NetworkInfo {
+    pub name: String,
+    pub is_mainnet: bool,
+}
+
+impl Default for NetworkInfo {
+    fn default() -> Self {
+        Self {
+            name: "POCX".to_string(),
+            is_mainnet: true,
+        }
+    }
+}
 
 /// Formatted output for a match
 #[derive(Debug, Clone)]
 pub struct FormattedMatch {
     pub address: String,
-    pub mainnet_wif: String,
-    pub testnet_wif: String,
-    pub mainnet_descriptor: String,
-    pub testnet_descriptor: String,
+    pub descriptors: Vec<(String, String)>, // (network_name, descriptor)
     pub private_key_hex: String,
 }
 
 impl FormattedMatch {
-    pub fn from_match(m: &Match) -> Self {
-        let mainnet_wif = encode_wif(&m.private_key, m.compressed, true);
-        let testnet_wif = encode_wif(&m.private_key, m.compressed, false);
-        
-        let mainnet_descriptor = create_descriptor(&mainnet_wif);
-        let testnet_descriptor = create_descriptor(&testnet_wif);
-        
+    pub fn from_match(m: &Match, networks: &[NetworkInfo]) -> Self {
+        let mut descriptors = Vec::new();
+
+        for net in networks {
+            let wif = encode_wif(&m.private_key, m.compressed, net.is_mainnet);
+            let descriptor = create_descriptor(&wif);
+            descriptors.push((net.name.clone(), descriptor));
+        }
+
         let private_key_hex = format!("0x{}", hex::encode(m.private_key.to_bytes()));
-        
+
         Self {
             address: m.address.clone(),
-            mainnet_wif,
-            testnet_wif,
-            mainnet_descriptor,
-            testnet_descriptor,
+            descriptors,
             private_key_hex,
         }
     }
 
     /// Format as human-readable text
     pub fn to_text(&self) -> String {
-        format!(
-            "Address: {}\n\
-             Mainnet WIF: {}\n\
-             Testnet WIF: {}\n\
-             Mainnet Descriptor: {}\n\
-             Testnet Descriptor: {}\n\
-             Private Key (hex): {}",
-            self.address,
-            self.mainnet_wif,
-            self.testnet_wif,
-            self.mainnet_descriptor,
-            self.testnet_descriptor,
-            self.private_key_hex
-        )
+        self.to_text_colored(false)
+    }
+
+    /// Format as human-readable text with optional ANSI colors
+    pub fn to_text_colored(&self, color: bool) -> String {
+        // ANSI color codes
+        let green = if color { "\x1b[32m" } else { "" };
+        let yellow = if color { "\x1b[33m" } else { "" };
+        let red = if color { "\x1b[31m" } else { "" };
+        let reset = if color { "\x1b[0m" } else { "" };
+
+        let mut lines = vec![format!("Address \t{}{}{}", green, self.address, reset)];
+
+        for (name, desc) in &self.descriptors {
+            // Color the WIF inside the descriptor yellow
+            // Descriptor format: wpkh(WIF)#checksum
+            let colored_desc = if color {
+                if let (Some(start), Some(end)) = (desc.find('('), desc.find(')')) {
+                    let prefix = &desc[..=start];
+                    let wif = &desc[start + 1..end];
+                    let suffix = &desc[end..];
+                    format!("{}{}{}{}", prefix, yellow, wif, reset).to_string() + suffix
+                } else {
+                    desc.clone()
+                }
+            } else {
+                desc.clone()
+            };
+            lines.push(format!("{} Descriptor\t{}", name, colored_desc));
+        }
+
+        lines.push(format!(
+            "Private Key \t{}{}{}",
+            red, self.private_key_hex, reset
+        ));
+
+        lines.join("\n")
     }
 
     /// Format as JSON
     pub fn to_json(&self) -> String {
+        let descriptors_json: Vec<String> = self
+            .descriptors
+            .iter()
+            .map(|(name, desc)| format!(r#"{{"network":"{}","descriptor":"{}"}}"#, name, desc))
+            .collect();
+
         format!(
-            r#"{{"address":"{}","mainnet_wif":"{}","testnet_wif":"{}","mainnet_descriptor":"{}","testnet_descriptor":"{}","private_key_hex":"{}"}}"#,
+            r#"{{"address":"{}","descriptors":[{}],"private_key_hex":"{}"}}"#,
             self.address,
-            self.mainnet_wif,
-            self.testnet_wif,
-            self.mainnet_descriptor,
-            self.testnet_descriptor,
+            descriptors_json.join(","),
             self.private_key_hex
         )
     }
 
     /// Format as CSV line
     pub fn to_csv(&self) -> String {
+        let descriptors_str: Vec<String> = self
+            .descriptors
+            .iter()
+            .map(|(name, desc)| format!("{}:{}", name, desc))
+            .collect();
+
         format!(
-            "{},{},{},{},{},{}",
+            "{},{},{}",
             self.address,
-            self.mainnet_wif,
-            self.testnet_wif,
-            self.mainnet_descriptor,
-            self.testnet_descriptor,
+            descriptors_str.join(";"),
             self.private_key_hex
         )
     }
@@ -101,10 +142,7 @@ impl Stats {
 
         format!(
             "[{:.1}s] {} | {} keys checked | {} matches",
-            self.elapsed_secs,
-            keys_str,
-            self.total_keys,
-            self.matches_found
+            self.elapsed_secs, keys_str, self.total_keys, self.matches_found
         )
     }
 }
@@ -122,11 +160,21 @@ mod tests {
             private_key: key,
             compressed: true,
         };
-        
-        let formatted = FormattedMatch::from_match(&m);
-        assert!(!formatted.mainnet_wif.is_empty());
-        assert!(!formatted.testnet_wif.is_empty());
-        assert!(formatted.mainnet_descriptor.contains('#'));
-        assert!(formatted.testnet_descriptor.contains('#'));
+
+        let networks = vec![
+            NetworkInfo {
+                name: "Main".to_string(),
+                is_mainnet: true,
+            },
+            NetworkInfo {
+                name: "Test".to_string(),
+                is_mainnet: false,
+            },
+        ];
+
+        let formatted = FormattedMatch::from_match(&m, &networks);
+        assert_eq!(formatted.descriptors.len(), 2);
+        assert!(formatted.descriptors[0].1.contains('#'));
+        assert!(formatted.descriptors[1].1.contains('#'));
     }
 }

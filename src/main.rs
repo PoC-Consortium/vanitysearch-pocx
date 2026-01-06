@@ -3,7 +3,9 @@
 use clap::Parser;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
-use vanitysearch_pocx::{CpuSearchConfig, CpuSearchEngine, FormattedMatch, Pattern, Stats};
+use vanitysearch_pocx::{
+    CpuSearchConfig, CpuSearchEngine, FormattedMatch, NetworkInfo, Pattern, Stats,
+};
 #[cfg(feature = "cuda")]
 use vanitysearch_pocx::{GpuSearchConfig, GpuSearchEngine};
 
@@ -55,10 +57,6 @@ struct Args {
     /// Quiet mode (no progress output)
     #[arg(short = 'q', long)]
     quiet: bool,
-
-    /// Networks config file
-    #[arg(long, default_value = "networks.toml")]
-    networks: String,
 }
 
 fn main() {
@@ -72,6 +70,18 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    // Fixed networks: Mainnet and Testnet
+    let networks = vec![
+        NetworkInfo {
+            name: "Main".to_string(),
+            is_mainnet: true,
+        },
+        NetworkInfo {
+            name: "Test".to_string(),
+            is_mainnet: false,
+        },
+    ];
 
     if !args.quiet {
         eprintln!("VanitySearch-POCX v0.1.0");
@@ -87,13 +97,13 @@ fn main() {
     }
 
     if args.gpu {
-        run_gpu_search(&args, pattern);
+        run_gpu_search(&args, pattern, networks);
     } else {
-        run_cpu_search(&args, pattern);
+        run_cpu_search(&args, pattern, networks);
     }
 }
 
-fn run_cpu_search(args: &Args, pattern: Pattern) {
+fn run_cpu_search(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>) {
     // Create search config
     let config = CpuSearchConfig {
         threads: args.threads,
@@ -119,10 +129,10 @@ fn run_cpu_search(args: &Args, pattern: Pattern) {
         engine
     };
 
-    run_main_loop(args, rx, &*engine_handle);
+    run_main_loop(args, rx, &*engine_handle, &networks);
 }
 
-fn run_gpu_search(_args: &Args, _pattern: Pattern) {
+fn run_gpu_search(_args: &Args, _pattern: Pattern, _networks: Vec<NetworkInfo>) {
     #[cfg(not(feature = "cuda"))]
     {
         eprintln!(
@@ -132,17 +142,24 @@ fn run_gpu_search(_args: &Args, _pattern: Pattern) {
     }
 
     #[cfg(feature = "cuda")]
-    run_gpu_search_cuda(_args, _pattern);
+    run_gpu_search_cuda(_args, _pattern, _networks);
 }
 
 #[cfg(feature = "cuda")]
-fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
+fn run_gpu_search_cuda(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>) {
+    // GPU mode does NOT support wildcards - check and abort early
+    if pattern.fast_matcher.has_wildcards {
+        eprintln!("Error: GPU mode does not support wildcards in patterns.");
+        eprintln!("Pattern '{}' contains wildcards (? or *).", args.pattern);
+        eprintln!("Please use CPU mode for wildcard patterns, or use a pattern without wildcards.");
+        std::process::exit(1);
+    }
+
     // Check GPU availability
     let device_count = GpuSearchEngine::device_count();
     if device_count == 0 {
-        eprintln!("Error: No CUDA devices found. Falling back to CPU mode.");
-        run_cpu_search(args, pattern);
-        return;
+        eprintln!("Error: No CUDA devices found.");
+        std::process::exit(1);
     }
 
     if !args.quiet {
@@ -190,9 +207,7 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
         Ok(e) => e,
         Err(err) => {
             eprintln!("Error: Failed to initialize GPU: {}", err);
-            eprintln!("Falling back to CPU mode.");
-            run_cpu_search(args, pattern);
-            return;
+            std::process::exit(1);
         }
     };
 
@@ -205,7 +220,7 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
         engine_clone.run(tx);
     });
 
-    run_main_loop_gpu(args, rx, &engine_handle);
+    run_main_loop_gpu(args, rx, &engine_handle, &networks);
 
     // Signal stop and wait for thread to finish cleanly
     engine_handle.stop();
@@ -254,6 +269,7 @@ fn run_main_loop<E: SearchEngine>(
     args: &Args,
     rx: mpsc::Receiver<vanitysearch_pocx::search::Match>,
     engine: &E,
+    networks: &[NetworkInfo],
 ) {
     let start_time = Instant::now();
     let mut last_stats_time = Instant::now();
@@ -335,24 +351,30 @@ fn run_main_loop<E: SearchEngine>(
     if !all_matches.is_empty() {
         if !args.quiet {
             eprintln!();
-            eprintln!("{}", "=".repeat(60));
-            eprintln!("RESULTS");
-            eprintln!("{}", "=".repeat(60));
+            eprintln!("{}", "=".repeat(85));
+            eprintln!("||{}RESULTS{}||", " ".repeat(37), " ".repeat(37));
+            eprintln!("{}", "=".repeat(85));
             eprintln!();
         }
 
         for m in &all_matches {
-            let formatted = FormattedMatch::from_match(m);
+            let formatted = FormattedMatch::from_match(m, networks);
 
             let output = match args.output_format.as_str() {
                 "json" => formatted.to_json(),
                 "csv" => formatted.to_csv(),
-                _ => formatted.to_text(),
+                _ => formatted.to_text_colored(true), // Use colored output for text
             };
 
             if let Some(ref mut file) = output_file {
                 use std::io::Write;
-                writeln!(file, "{}", output).expect("Failed to write to output file");
+                // Write without colors to file
+                let file_output = match args.output_format.as_str() {
+                    "json" => formatted.to_json(),
+                    "csv" => formatted.to_csv(),
+                    _ => formatted.to_text(), // No colors for file output
+                };
+                writeln!(file, "{}", file_output).expect("Failed to write to output file");
                 writeln!(file).ok();
             } else {
                 // Use eprintln for consistent output stream
@@ -369,6 +391,7 @@ fn run_main_loop_gpu(
     args: &Args,
     rx: mpsc::Receiver<vanitysearch_pocx::search::Match>,
     engine: &GpuSearchEngine,
+    networks: &[NetworkInfo],
 ) {
-    run_main_loop(args, rx, engine);
+    run_main_loop(args, rx, engine, networks);
 }

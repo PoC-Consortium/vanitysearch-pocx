@@ -13,10 +13,18 @@ pub fn hash160(data: &[u8]) -> [u8; 20] {
 }
 
 /// Optimized Hash160 for exactly 33-byte compressed public keys
-/// ~2x faster than generic hash160() for this specific size
+/// Uses hardware-accelerated SHA256 and RIPEMD160 when available
 #[inline]
 pub fn hash160_33(pubkey: &[u8; 33]) -> [u8; 20] {
-    ripemd160_32(&sha256_33(pubkey))
+    use sha2::{Sha256 as Sha256Hw, Digest};
+    use ripemd::{Ripemd160 as Ripemd160Hw};
+    
+    let sha_result = Sha256Hw::digest(pubkey);
+    let ripemd_result = Ripemd160Hw::digest(&sha_result);
+    
+    let mut result = [0u8; 20];
+    result.copy_from_slice(&ripemd_result);
+    result
 }
 
 #[cfg(test)]

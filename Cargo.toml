@@ -18,6 +18,8 @@ rayon = "1.10"
 num_cpus = "1.16"
 rand = "0.8"
 hex = "0.4"
+sha2 = "0.10"
+ripemd = "0.1"
 
 [build-dependencies]
 cc = "1.0"

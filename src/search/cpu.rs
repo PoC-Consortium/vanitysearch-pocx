@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Group size for batch processing (matches VanitySearch GRP_SIZE)
+/// Larger values = better batch efficiency, more memory usage
 const GRP_SIZE: usize = 1024;
 
 /// Result of a vanity search match
@@ -98,53 +99,45 @@ pub struct CpuSearchEngine {
 /// Batch modular inverse using Montgomery's trick
 /// Given [a0, a1, ..., an-1], compute [1/a0, 1/a1, ..., 1/an-1]
 /// Cost: 1 inverse + 3*(n-1) multiplications instead of n inverses
-fn batch_inverse(vals: &[FieldElement]) -> Vec<FieldElement> {
+fn batch_inverse_into(vals: &[FieldElement], result: &mut [FieldElement]) {
     let n = vals.len();
     if n == 0 {
-        return vec![];
+        return;
     }
     if n == 1 {
-        return vec![vals[0].inv()];
+        result[0] = vals[0].inv();
+        return;
     }
     
-    // Compute cumulative products: prefix[i] = a0 * a1 * ... * ai
-    let mut prefix = Vec::with_capacity(n);
-    prefix.push(vals[0]);
+    // Use result buffer for prefix products to avoid extra allocation
+    result[0] = vals[0];
     for i in 1..n {
-        prefix.push(prefix[i - 1].mul(&vals[i]));
+        result[i] = result[i - 1].mul(&vals[i]);
     }
     
     // Compute inverse of product
-    let mut inv_all = prefix[n - 1].inv();
+    let mut inv_all = result[n - 1].inv();
     
     // Work backwards to get individual inverses
-    let mut result = vec![FieldElement::ZERO; n];
     for i in (1..n).rev() {
         // result[i] = inv(a0*...*a[i]) * (a0*...*a[i-1]) = inv(a[i])
-        result[i] = inv_all.mul(&prefix[i - 1]);
+        let prefix_prev = result[i - 1];
+        result[i] = inv_all.mul(&prefix_prev);
         // Update: inv_all = inv(a0*...*a[i]) * a[i] = inv(a0*...*a[i-1])
         inv_all = inv_all.mul(&vals[i]);
     }
     result[0] = inv_all;
-    
-    result
 }
 
-/// Check address and potentially record match
+/// Check address and potentially record match - optimized version
 /// Uses fast hash160 prefix matching to avoid full bech32 encoding
-#[inline]
-#[allow(clippy::too_many_arguments)]
-fn check_point_and_record(
+#[inline(always)]
+#[allow(dead_code)]
+fn check_point_fast(
     x: &FieldElement,
     y: &FieldElement,
-    base_key: &Scalar,
-    key_offset: i64,
-    key_transform: impl FnOnce(Scalar) -> Scalar,
-    hrp: &str,
     pattern: &Pattern,
-    results_tx: &std::sync::mpsc::Sender<Match>,
-    matches_found: &AtomicU64,
-) {
+) -> Option<[u8; 20]> {
     // Compute compressed pubkey (33 bytes)
     let x_bytes = x.to_bytes();
     let prefix = if y.is_odd() { 0x03 } else { 0x02 };
@@ -155,23 +148,70 @@ fn check_point_and_record(
     // Hash160 using optimized function for 33-byte input
     let h160 = hash160_33(&pubkey);
     
-    // Fast prefix check on hash160 bytes (avoids bech32 encoding for non-matches)
+    // Fast prefix check on hash160 bytes
     if !pattern.matches_hash160(&h160) {
+        return None;
+    }
+    
+    Some(h160)
+}
+
+/// Optimized check that takes pre-computed x bytes
+/// Avoids redundant to_bytes() calls for endomorphism variants
+#[inline(always)]
+fn check_point_with_x_bytes(
+    x_bytes: &[u8; 32],
+    y: &FieldElement,
+    pattern: &Pattern,
+) -> Option<[u8; 20]> {
+    // Compute compressed pubkey (33 bytes)
+    let prefix = if y.is_odd() { 0x03 } else { 0x02 };
+    let mut pubkey = [0u8; 33];
+    pubkey[0] = prefix;
+    pubkey[1..33].copy_from_slice(x_bytes);
+    
+    // Hash160 using optimized function for 33-byte input
+    let h160 = hash160_33(&pubkey);
+    
+    // Fast prefix check on hash160 bytes
+    if !pattern.matches_hash160(&h160) {
+        return None;
+    }
+    
+    Some(h160)
+}
+
+/// Record a match
+#[inline]
+fn record_match(
+    h160: &[u8; 20],
+    base_key: &Scalar,
+    key_offset: i64,
+    key_multiplier: Option<&Scalar>,
+    negate: bool,
+    hrp: &str,
+    pattern: &Pattern,
+    results_tx: &std::sync::mpsc::Sender<Match>,
+    matches_found: &AtomicU64,
+) {
+    // Full match - create bech32 address
+    let address = bech32::address_from_hash160(hrp, h160);
+    
+    // If pattern has wildcards, need to do full match
+    if pattern.fast_matcher.has_wildcards && !pattern.matches(&address) {
         return;
     }
     
-    // Full match - create bech32 address
-    let address = bech32::address_from_hash160(hrp, &h160);
-    
-    // If pattern has wildcards, need to do full match
-    if pattern.fast_matcher.has_wildcards
-        && !pattern.matches(&address) {
-            return;
-        }
-    
     let mut match_key = *base_key;
     match_key.add_assign(key_offset);
-    let match_key = key_transform(match_key);
+    
+    if negate {
+        match_key = match_key.neg();
+    }
+    
+    if let Some(mult) = key_multiplier {
+        match_key = match_key.mul(mult);
+    }
     
     let m = Match {
         address,
@@ -240,6 +280,7 @@ impl CpuSearchEngine {
                     let mut px = vec![FieldElement::ZERO; GRP_SIZE];
                     let mut py = vec![FieldElement::ZERO; GRP_SIZE];
                     let mut dx = vec![FieldElement::ZERO; GRP_SIZE];
+                    let mut dx_inv = vec![FieldElement::ZERO; GRP_SIZE];
                     
                     loop {
                         // Check stop conditions
@@ -262,24 +303,18 @@ impl CpuSearchEngine {
                         // Using: P[i] = P[i-1] + G, but batching the modular inverses
                         
                         // Step 1: Compute all dx = x_G - x_point for the additions
-                        // For i in 0..GRP_SIZE/2, we add Gx[i] (i+1)*G to center
-                        // For i in GRP_SIZE/2..GRP_SIZE, we subtract Gx[GRP_SIZE-i-1]
-                        
                         let (cx, cy) = (center_point.x, center_point.y);
                         
-                        // Positive side: center + 1*G, center + 2*G, ... (indices GRP_SIZE/2 to GRP_SIZE-1)
+                        // Both positive and negative sides use the same gx values
+                        // dx[i] = gx[dist] - cx where dist is the distance from center
                         for i in 0..(GRP_SIZE / 2) {
-                            dx[GRP_SIZE / 2 + i] = group_table.gx[i].sub(&cx);
+                            let diff = group_table.gx[i].sub(&cx);
+                            dx[GRP_SIZE / 2 + i] = diff;
+                            dx[GRP_SIZE / 2 - 1 - i] = diff;
                         }
                         
-                        // Negative side: center - 1*G, center - 2*G, ... (indices GRP_SIZE/2-1 down to 0)  
-                        // center - i*G = center + (-i*G), and -i*G has x = same, y = -y
-                        for i in 0..(GRP_SIZE / 2) {
-                            dx[GRP_SIZE / 2 - 1 - i] = group_table.gx[i].sub(&cx);
-                        }
-                        
-                        // Step 2: Batch inverse all dx values
-                        let dx_inv = batch_inverse(&dx);
+                        // Step 2: Batch inverse all dx values (reuse dx_inv buffer)
+                        batch_inverse_into(&dx, &mut dx_inv);
                         
                         // Step 3: Complete the point additions
                         // Center point goes in the middle
@@ -289,16 +324,16 @@ impl CpuSearchEngine {
                         // Positive direction: P[i] = center + (i - GRP_SIZE/2 + 1)*G
                         for i in 1..(GRP_SIZE / 2) {
                             let idx = GRP_SIZE / 2 + i;
-                            let gx = &group_table.gx[i - 1]; // This is i*G
+                            let gx = &group_table.gx[i - 1];
                             let gy = &group_table.gy[i - 1];
                             
-                            // Point addition: center + i*G
-                            // λ = (gy - cy) / (gx - cx) = (gy - cy) * dx_inv[idx]
+                            // λ = (gy - cy) * dx_inv
                             let dy = gy.sub(&cy);
                             let lambda = dy.mul(&dx_inv[idx - 1]);
                             
                             // x3 = λ² - cx - gx, y3 = λ(cx - x3) - cy
-                            let x3 = lambda.sqr().sub(&cx).sub(gx);
+                            let lambda_sq = lambda.sqr();
+                            let x3 = lambda_sq.sub(&cx).sub(gx);
                             let y3 = lambda.mul(&cx.sub(&x3)).sub(&cy);
                             
                             px[idx] = x3;
@@ -307,15 +342,15 @@ impl CpuSearchEngine {
                         
                         // Negative direction: P[i] = center - (GRP_SIZE/2 - i)*G
                         for i in (0..(GRP_SIZE / 2)).rev() {
-                            let dist = GRP_SIZE / 2 - i; // Distance from center
-                            let gx = &group_table.gx[dist - 1]; // dist*G
-                            let neg_gy = group_table.gy[dist - 1].neg(); // -(dist*G).y
+                            let dist = GRP_SIZE / 2 - i;
+                            let gx = &group_table.gx[dist - 1];
+                            let neg_gy = group_table.gy[dist - 1].neg();
                             
-                            // Point addition: center + (-dist*G) where -dist*G = (gx, -gy)
                             let dy = neg_gy.sub(&cy);
                             let lambda = dy.mul(&dx_inv[i]);
                             
-                            let x3 = lambda.sqr().sub(&cx).sub(gx);
+                            let lambda_sq = lambda.sqr();
+                            let x3 = lambda_sq.sub(&cx).sub(gx);
                             let y3 = lambda.mul(&cx.sub(&x3)).sub(&cy);
                             
                             px[i] = x3;
@@ -326,48 +361,47 @@ impl CpuSearchEngine {
                         for i in 0..GRP_SIZE {
                             let x = &px[i];
                             let y = &py[i];
-                            
-                            // Key offset from base_key
                             let key_offset = (i as i64) - (GRP_SIZE as i64 / 2);
                             
-                            // 1. Original point (x, y) -> key
-                            check_point_and_record(
-                                x, y, &base_key, key_offset, |k| k,
-                                &hrp, &pattern, &results_tx, &matches_found,
-                            );
+                            // Pre-compute x bytes once for this point
+                            let x_bytes = x.to_bytes();
                             
-                            // 2. Endomorphism 1: (beta*x, y) -> lambda*key  
+                            // Pre-compute endomorphism x values and their bytes
                             let beta_x = x.mul(&BETA);
-                            check_point_and_record(
-                                &beta_x, y, &base_key, key_offset, |k| k.mul(&LAMBDA),
-                                &hrp, &pattern, &results_tx, &matches_found,
-                            );
+                            let beta_x_bytes = beta_x.to_bytes();
+                            let beta2_x = x.mul(&BETA2);
+                            let beta2_x_bytes = beta2_x.to_bytes();
+                            let neg_y = y.neg();
+                            
+                            // 1. Original point (x, y)
+                            if let Some(h160) = check_point_with_x_bytes(&x_bytes, y, &pattern) {
+                                record_match(&h160, &base_key, key_offset, None, false, &hrp, &pattern, &results_tx, &matches_found);
+                            }
+                            
+                            // 2. Endomorphism 1: (beta*x, y) -> lambda*key
+                            if let Some(h160) = check_point_with_x_bytes(&beta_x_bytes, y, &pattern) {
+                                record_match(&h160, &base_key, key_offset, Some(&LAMBDA), false, &hrp, &pattern, &results_tx, &matches_found);
+                            }
                             
                             // 3. Endomorphism 2: (beta²*x, y) -> lambda²*key
-                            let beta2_x = x.mul(&BETA2);
-                            check_point_and_record(
-                                &beta2_x, y, &base_key, key_offset, |k| k.mul(&LAMBDA2),
-                                &hrp, &pattern, &results_tx, &matches_found,
-                            );
+                            if let Some(h160) = check_point_with_x_bytes(&beta2_x_bytes, y, &pattern) {
+                                record_match(&h160, &base_key, key_offset, Some(&LAMBDA2), false, &hrp, &pattern, &results_tx, &matches_found);
+                            }
                             
                             // 4. Negation: (x, -y) -> -key
-                            let neg_y = y.neg();
-                            check_point_and_record(
-                                x, &neg_y, &base_key, key_offset, |k| k.neg(),
-                                &hrp, &pattern, &results_tx, &matches_found,
-                            );
+                            if let Some(h160) = check_point_with_x_bytes(&x_bytes, &neg_y, &pattern) {
+                                record_match(&h160, &base_key, key_offset, None, true, &hrp, &pattern, &results_tx, &matches_found);
+                            }
                             
-                            // 5. Negation + endo1: (beta*x, -y) -> -lambda*key
-                            check_point_and_record(
-                                &beta_x, &neg_y, &base_key, key_offset, |k| k.neg().mul(&LAMBDA),
-                                &hrp, &pattern, &results_tx, &matches_found,
-                            );
+                            // 5. Negation + endo1: (beta*x, -y) -> -(lambda*key)
+                            if let Some(h160) = check_point_with_x_bytes(&beta_x_bytes, &neg_y, &pattern) {
+                                record_match(&h160, &base_key, key_offset, Some(&LAMBDA), true, &hrp, &pattern, &results_tx, &matches_found);
+                            }
                             
-                            // 6. Negation + endo2: (beta²*x, -y) -> -lambda²*key
-                            check_point_and_record(
-                                &beta2_x, &neg_y, &base_key, key_offset, |k| k.neg().mul(&LAMBDA2),
-                                &hrp, &pattern, &results_tx, &matches_found,
-                            );
+                            // 6. Negation + endo2: (beta²*x, -y) -> -(lambda²*key)
+                            if let Some(h160) = check_point_with_x_bytes(&beta2_x_bytes, &neg_y, &pattern) {
+                                record_match(&h160, &base_key, key_offset, Some(&LAMBDA2), true, &hrp, &pattern, &results_tx, &matches_found);
+                            }
                             
                             // Check for early termination
                             if max_matches > 0 && matches_found.load(Ordering::Relaxed) >= max_matches {
