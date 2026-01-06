@@ -3,7 +3,7 @@
 
 #![allow(clippy::needless_range_loop)] // Indexed loops clearer for low-level math
 
-use std::ops::{Add, Sub, Mul, Neg};
+use std::ops::{Add, Mul, Neg, Sub};
 
 /// Prime field element for secp256k1
 /// p = 2^256 - 2^32 - 977
@@ -35,8 +35,14 @@ impl FieldElement {
         for i in 0..4 {
             let offset = (3 - i) * 8;
             d[i] = u64::from_be_bytes([
-                bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3],
-                bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7],
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+                bytes[offset + 4],
+                bytes[offset + 5],
+                bytes[offset + 6],
+                bytes[offset + 7],
             ]);
         }
         Self { d }
@@ -111,7 +117,7 @@ impl FieldElement {
     pub fn mul_ref(&self, other: &Self) -> Self {
         // Full 512-bit multiplication
         let mut t = [0u64; 8];
-        
+
         for i in 0..4 {
             let mut carry = 0u128;
             for j in 0..4 {
@@ -131,7 +137,7 @@ impl FieldElement {
     fn reduce_512(&self, t: &[u64; 8]) -> Self {
         // t[0..4] + t[4..8] * 2^256 mod p
         // = t[0..4] + t[4..8] * 0x1000003D1 mod p
-        
+
         let mut r = [0u64; 5];
         let k: u64 = 0x1000003D1;
 
@@ -156,11 +162,11 @@ impl FieldElement {
         if r[4] != 0 {
             let overflow = r[4];
             r[4] = 0;
-            
+
             carry = (overflow as u128) * (k as u128) + (r[0] as u128);
             r[0] = carry as u64;
             carry >>= 64;
-            
+
             for i in 1..4 {
                 carry += r[i] as u128;
                 r[i] = carry as u64;
@@ -168,7 +174,9 @@ impl FieldElement {
             }
         }
 
-        let mut result = Self { d: [r[0], r[1], r[2], r[3]] };
+        let mut result = Self {
+            d: [r[0], r[1], r[2], r[3]],
+        };
         if result.gte_p() {
             result.sub_p();
         }
@@ -188,14 +196,14 @@ impl FieldElement {
         } else {
             let mut r = [0u64; 4];
             let mut borrow = 0u64;
-            
+
             for i in 0..4 {
                 let (diff, b1) = P[i].overflowing_sub(self.d[i]);
                 let (diff, b2) = diff.overflowing_sub(borrow);
                 r[i] = diff;
                 borrow = (b1 as u64) + (b2 as u64);
             }
-            
+
             Self { d: r }
         }
     }
@@ -205,7 +213,7 @@ impl FieldElement {
     pub fn inv(&self) -> Self {
         // Use addition chain optimized for secp256k1
         // p - 2 = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2D
-        
+
         let x2 = self.sqr().mul_ref(self);
         let x3 = x2.sqr().mul_ref(self);
         let x6 = x3.sqr().sqr().sqr().mul_ref(&x3);
@@ -240,7 +248,7 @@ impl FieldElement {
     pub fn sqrt(&self) -> Option<Self> {
         // For secp256k1, p ≡ 3 (mod 4), so sqrt(a) = a^((p+1)/4) if exists
         // (p + 1) / 4 = 0x3FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFBFFFFF0C
-        
+
         let x2 = self.sqr().mul_ref(self);
         let x3 = x2.sqr().mul_ref(self);
         let x6 = x3.sqr().sqr().sqr().mul_ref(&x3);

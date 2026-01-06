@@ -3,7 +3,7 @@
 
 #![allow(clippy::needless_range_loop)] // Indexed loops clearer for low-level math
 
-use std::ops::{Add, Sub, Mul, Neg};
+use std::ops::{Add, Mul, Neg, Sub};
 
 /// Scalar element for secp256k1 (private key domain)
 /// n = order of the curve
@@ -48,8 +48,14 @@ impl Scalar {
         for i in 0..4 {
             let offset = (3 - i) * 8;
             d[i] = u64::from_be_bytes([
-                bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3],
-                bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7],
+                bytes[offset],
+                bytes[offset + 1],
+                bytes[offset + 2],
+                bytes[offset + 3],
+                bytes[offset + 4],
+                bytes[offset + 5],
+                bytes[offset + 6],
+                bytes[offset + 7],
             ]);
         }
         Self { d }
@@ -144,14 +150,14 @@ impl Scalar {
         } else {
             let mut r = [0u64; 4];
             let mut borrow = 0u64;
-            
+
             for i in 0..4 {
                 let (diff, b1) = N[i].overflowing_sub(self.d[i]);
                 let (diff, b2) = diff.overflowing_sub(borrow);
                 r[i] = diff;
                 borrow = (b1 as u64) + (b2 as u64);
             }
-            
+
             Self { d: r }
         }
     }
@@ -164,7 +170,7 @@ impl Scalar {
     /// Modular multiplication (reference version)
     pub fn mul_ref(a: &Self, b: &Self) -> Self {
         let mut t = [0u64; 8];
-        
+
         for i in 0..4 {
             let mut carry = 0u128;
             for j in 0..4 {
@@ -182,9 +188,9 @@ impl Scalar {
     fn reduce_512_static(t: &[u64; 8]) -> Self {
         // Barrett reduction for secp256k1 order
         // This is a simplified version - proper Barrett would be more complex
-        
+
         let mut r = [0u64; 5];
-        
+
         // Copy lower 256 bits
         r[0] = t[0];
         r[1] = t[1];
@@ -195,12 +201,14 @@ impl Scalar {
         // Reduce high bits
         // For simplicity, we do multiple subtractions if needed
         // In production, use proper Barrett reduction
-        
+
         if t[4] != 0 || t[5] != 0 || t[6] != 0 || t[7] != 0 {
             // Compute high * something and subtract
             // This is a simplified reduction
-            let high = Scalar { d: [t[4], t[5], t[6], t[7]] };
-            
+            let high = Scalar {
+                d: [t[4], t[5], t[6], t[7]],
+            };
+
             // 2^256 mod n = 0x14551231950B75FC4402DA1732FC9BEBF
             let k = Scalar::new([
                 0x4402DA1732FC9BEB,
@@ -208,19 +216,23 @@ impl Scalar {
                 0x0000000000000000,
                 0x0000000000000000,
             ]);
-            
+
             // Actually we need to handle this properly
             // For now, do iterative reduction
-            let mut result = Scalar { d: [r[0], r[1], r[2], r[3]] };
-            
+            let mut result = Scalar {
+                d: [r[0], r[1], r[2], r[3]],
+            };
+
             // Add contribution from high part
             let contrib = Scalar::mul_ref(&high, &k);
             result = Scalar::add_ref(&result, &contrib);
-            
+
             return result;
         }
 
-        let mut result = Scalar { d: [r[0], r[1], r[2], r[3]] };
+        let mut result = Scalar {
+            d: [r[0], r[1], r[2], r[3]],
+        };
         while result.gte_n() {
             result.sub_n();
         }

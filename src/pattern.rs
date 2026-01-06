@@ -3,14 +3,13 @@
 
 /// Bech32 charset reverse lookup (char -> 5-bit value)
 const BECH32_REV: [i8; 128] = [
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    15, -1, 10, 17, 21, 20, 26, 30,  7,  5, -1, -1, -1, -1, -1, -1,  // 0-9
-    -1, 29, -1, 24, 13, 25,  9,  8, 23, -1, 18, 22, 31, 27, 19, -1,  // A-O
-     1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1,  // P-Z
-    -1, 29, -1, 24, 13, 25,  9,  8, 23, -1, 18, 22, 31, 27, 19, -1,  // a-o
-     1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1,  // p-z
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+    15, -1, 10, 17, 21, 20, 26, 30, 7, 5, -1, -1, -1, -1, -1, -1, // 0-9
+    -1, 29, -1, 24, 13, 25, 9, 8, 23, -1, 18, 22, 31, 27, 19, -1, // A-O
+    1, 0, 3, 16, 11, 28, 12, 14, 6, 4, 2, -1, -1, -1, -1, -1, // P-Z
+    -1, 29, -1, 24, 13, 25, 9, 8, 23, -1, 18, 22, 31, 27, 19, -1, // a-o
+    1, 0, 3, 16, 11, 28, 12, 14, 6, 4, 2, -1, -1, -1, -1, -1, // p-z
 ];
 
 /// Fast prefix matcher for hash160 bytes
@@ -29,18 +28,22 @@ impl FastPrefixMatcher {
     /// Create from a data pattern (part after "hrp1")
     pub fn new(data_pattern: &str) -> Self {
         let chars: Vec<char> = data_pattern.chars().collect();
-        
+
         // Check for wildcards
         let has_wildcards = chars.iter().any(|&c| c == '?' || c == '*');
-        
+
         if has_wildcards {
             // Find prefix before first wildcard
-            let end = chars.iter().position(|&c| c == '?' || c == '*').unwrap_or(chars.len());
+            let end = chars
+                .iter()
+                .position(|&c| c == '?' || c == '*')
+                .unwrap_or(chars.len());
             let prefix_chars: Vec<char> = chars[..end].to_vec();
-            
+
             // Skip witness version 'q' at position 0
             let prefix_5bit: Vec<u8> = if prefix_chars.len() > 1 {
-                prefix_chars[1..].iter()
+                prefix_chars[1..]
+                    .iter()
                     .filter_map(|&c| {
                         let idx = c as usize;
                         if idx < 128 && BECH32_REV[idx] >= 0 {
@@ -53,7 +56,7 @@ impl FastPrefixMatcher {
             } else {
                 vec![]
             };
-            
+
             Self {
                 prefix_len: prefix_5bit.len(),
                 prefix_5bit,
@@ -62,7 +65,8 @@ impl FastPrefixMatcher {
         } else {
             // No wildcards - convert entire prefix (skip witness version 'q')
             let prefix_5bit: Vec<u8> = if chars.len() > 1 {
-                chars[1..].iter()
+                chars[1..]
+                    .iter()
                     .filter_map(|&c| {
                         let idx = c as usize;
                         if idx < 128 && BECH32_REV[idx] >= 0 {
@@ -75,7 +79,7 @@ impl FastPrefixMatcher {
             } else {
                 vec![]
             };
-            
+
             Self {
                 prefix_len: prefix_5bit.len(),
                 prefix_5bit,
@@ -83,7 +87,7 @@ impl FastPrefixMatcher {
             }
         }
     }
-    
+
     /// Check if hash160 matches the prefix pattern
     /// Returns true if the bech32-encoded hash160 would start with the pattern
     #[inline]
@@ -91,21 +95,21 @@ impl FastPrefixMatcher {
         if self.prefix_len == 0 {
             return true;
         }
-        
+
         // Convert hash160 to 5-bit values on the fly
         // We only need to convert enough bits to check the prefix
         let bits_needed = self.prefix_len * 5;
         let bytes_needed = bits_needed.div_ceil(8);
-        
+
         // Extract 5-bit values from hash160
         let mut acc: u32 = 0;
         let mut bits: u32 = 0;
         let mut idx = 0;
-        
+
         for &byte in hash160.iter().take(bytes_needed.min(20)) {
             acc = (acc << 8) | (byte as u32);
             bits += 8;
-            
+
             while bits >= 5 && idx < self.prefix_len {
                 bits -= 5;
                 let val = ((acc >> bits) & 0x1f) as u8;
@@ -115,7 +119,7 @@ impl FastPrefixMatcher {
                 idx += 1;
             }
         }
-        
+
         true
     }
 }
@@ -141,26 +145,26 @@ impl Pattern {
     /// Create a new pattern from string
     pub fn new(pattern: &str) -> Result<Self, PatternError> {
         let pattern = pattern.to_lowercase();
-        
+
         // Validate pattern format
         if pattern.len() < 4 {
             return Err(PatternError::TooShort);
         }
-        
+
         // Find HRP separator
         let sep_pos = pattern.find('1').ok_or(PatternError::NoSeparator)?;
         if sep_pos < 1 {
             return Err(PatternError::InvalidHrp);
         }
-        
+
         let hrp = pattern[..sep_pos].to_string();
         let data_pattern = pattern[sep_pos + 1..].to_string();
-        
+
         // Validate HRP
         if !hrp.chars().all(|c| c.is_ascii_lowercase()) {
             return Err(PatternError::InvalidHrp);
         }
-        
+
         // Check witness version (should be 'q' for version 0)
         if !data_pattern.is_empty() {
             let first_char = data_pattern.chars().next().unwrap();
@@ -168,31 +172,31 @@ impl Pattern {
                 return Err(PatternError::InvalidWitnessVersion);
             }
         }
-        
+
         // Validate data pattern characters
         for c in data_pattern.chars() {
             if !is_valid_pattern_char(c) {
                 return Err(PatternError::InvalidCharacter(c));
             }
         }
-        
+
         // Calculate difficulty
-        let concrete_chars = data_pattern.chars()
+        let concrete_chars = data_pattern
+            .chars()
             .filter(|&c| c != '?' && c != '*')
             .count();
-        
+
         // Each bech32 character is 5 bits
         let difficulty = (32.0f64).powi(concrete_chars as i32);
-        
+
         // Check if it's a full 42-character address (hrp + 1 + 39 data + 6 checksum)
         // For bc: 2 + 1 + 39 = 42
-        let is_full = data_pattern.len() >= 39 && 
-                      !data_pattern.contains('?') && 
-                      !data_pattern.contains('*');
-        
+        let is_full =
+            data_pattern.len() >= 39 && !data_pattern.contains('?') && !data_pattern.contains('*');
+
         // Create fast prefix matcher
         let fast_matcher = FastPrefixMatcher::new(&data_pattern);
-        
+
         Ok(Self {
             pattern,
             hrp,
@@ -202,7 +206,7 @@ impl Pattern {
             fast_matcher,
         })
     }
-    
+
     /// Fast check if a hash160 matches the prefix pattern
     /// This avoids the full bech32 encoding when possible
     #[inline]
@@ -213,32 +217,34 @@ impl Pattern {
     /// Check if an address matches this pattern
     pub fn matches(&self, address: &str) -> bool {
         let address = address.to_lowercase();
-        
+
         // Check HRP
         if !address.starts_with(&self.hrp) {
             return false;
         }
-        
+
         // Check separator
         let expected_sep = self.hrp.len();
         if address.len() <= expected_sep || address.chars().nth(expected_sep) != Some('1') {
             return false;
         }
-        
+
         // Get data part of address
         let addr_data = &address[expected_sep + 1..];
-        
+
         // Match pattern
         match_wildcard(&self.data_pattern, addr_data)
     }
-    
+
     /// Get pattern prefix (characters before first wildcard)
     pub fn prefix(&self) -> &str {
-        let end = self.data_pattern.find(['?', '*'])
+        let end = self
+            .data_pattern
+            .find(['?', '*'])
             .unwrap_or(self.data_pattern.len());
         &self.data_pattern[..end]
     }
-    
+
     /// Get minimum prefix length for matching
     pub fn min_prefix_len(&self) -> usize {
         self.prefix().len()
@@ -249,10 +255,42 @@ impl Pattern {
 #[inline]
 fn is_valid_pattern_char(c: char) -> bool {
     // Bech32 charset + wildcards
-    matches!(c, 'q' | 'p' | 'z' | 'r' | 'y' | '9' | 'x' | '8' | 'g' | 'f' |
-               '2' | 't' | 'v' | 'd' | 'w' | '0' | 's' | '3' | 'j' | 'n' |
-               '5' | '4' | 'k' | 'h' | 'c' | 'e' | '6' | 'm' | 'u' | 'a' |
-               '7' | 'l' | '?' | '*')
+    matches!(
+        c,
+        'q' | 'p'
+            | 'z'
+            | 'r'
+            | 'y'
+            | '9'
+            | 'x'
+            | '8'
+            | 'g'
+            | 'f'
+            | '2'
+            | 't'
+            | 'v'
+            | 'd'
+            | 'w'
+            | '0'
+            | 's'
+            | '3'
+            | 'j'
+            | 'n'
+            | '5'
+            | '4'
+            | 'k'
+            | 'h'
+            | 'c'
+            | 'e'
+            | '6'
+            | 'm'
+            | 'u'
+            | 'a'
+            | '7'
+            | 'l'
+            | '?'
+            | '*'
+    )
 }
 
 /// Match string against pattern with wildcards
@@ -260,10 +298,10 @@ fn is_valid_pattern_char(c: char) -> bool {
 fn match_wildcard(pattern: &str, string: &str) -> bool {
     let pattern: Vec<char> = pattern.chars().collect();
     let string: Vec<char> = string.chars().collect();
-    
+
     // If pattern doesn't contain any wildcards, do simple prefix match
     let has_wildcards = pattern.iter().any(|&c| c == '?' || c == '*');
-    
+
     if !has_wildcards {
         // Pure prefix matching
         if string.len() < pattern.len() {
@@ -271,7 +309,7 @@ fn match_wildcard(pattern: &str, string: &str) -> bool {
         }
         return pattern.iter().zip(string.iter()).all(|(p, s)| p == s);
     }
-    
+
     // If pattern ends with *, use wildcard matching as-is
     // Otherwise, append implicit * for prefix behavior
     if pattern.last() == Some(&'*') {
@@ -288,13 +326,13 @@ fn match_wildcard_recursive(pattern: &[char], string: &[char], pi: usize, si: us
     if pi == pattern.len() && si == string.len() {
         return true;
     }
-    
+
     if pi == pattern.len() {
         return false;
     }
-    
+
     let pc = pattern[pi];
-    
+
     match pc {
         '*' => {
             // Try matching * with 0 or more characters
@@ -340,11 +378,11 @@ pub fn matches_prefix(addr_data: &str, pattern_prefix: &str) -> bool {
 pub fn hash160_to_bech32_data(hash160: &[u8; 20]) -> Vec<u8> {
     let mut data = Vec::with_capacity(33);
     data.push(0); // witness version 0
-    
+
     // Convert 8-bit to 5-bit
     let mut acc = 0u32;
     let mut bits = 0;
-    
+
     for &byte in hash160 {
         acc = (acc << 8) | (byte as u32);
         bits += 8;
@@ -353,11 +391,11 @@ pub fn hash160_to_bech32_data(hash160: &[u8; 20]) -> Vec<u8> {
             data.push(((acc >> bits) & 0x1f) as u8);
         }
     }
-    
+
     if bits > 0 {
         data.push(((acc << (5 - bits)) & 0x1f) as u8);
     }
-    
+
     data
 }
 
@@ -376,7 +414,9 @@ impl std::fmt::Display for PatternError {
             PatternError::TooShort => write!(f, "Pattern too short (min 4 chars)"),
             PatternError::NoSeparator => write!(f, "Missing separator '1'"),
             PatternError::InvalidHrp => write!(f, "Invalid HRP"),
-            PatternError::InvalidWitnessVersion => write!(f, "Invalid witness version (expected 'q' for v0)"),
+            PatternError::InvalidWitnessVersion => {
+                write!(f, "Invalid witness version (expected 'q' for v0)")
+            }
             PatternError::InvalidCharacter(c) => write!(f, "Invalid character in pattern: '{}'", c),
         }
     }

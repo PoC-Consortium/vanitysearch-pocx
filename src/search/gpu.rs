@@ -152,11 +152,12 @@ mod cuda_impl {
 
             // Extract pattern (after hrp + "1q")
             let full_prefix = format!("{}1q", config.hrp);
-            let pattern_str = if let Some(stripped) = config.pattern.pattern.strip_prefix(&full_prefix) {
-                stripped.to_string()
-            } else {
-                config.pattern.data_pattern.clone()
-            };
+            let pattern_str =
+                if let Some(stripped) = config.pattern.pattern.strip_prefix(&full_prefix) {
+                    stripped.to_string()
+                } else {
+                    config.pattern.data_pattern.clone()
+                };
 
             // Remove witness version 'q' if present at start
             let pattern_str = if let Some(stripped) = pattern_str.strip_prefix('q') {
@@ -403,7 +404,11 @@ mod cuda_impl {
 
                     // Apply increment: for both positive and negative incr, we ADD |incr|
                     // For negative incr, we'll negate the key later
-                    let incr_abs = if incr >= 0 { incr as u64 } else { (-incr) as u64 };
+                    let incr_abs = if incr >= 0 {
+                        incr as u64
+                    } else {
+                        (-incr) as u64
+                    };
                     let mut incr_bytes = [0u8; 32];
                     incr_bytes[24] = (incr_abs >> 56) as u8;
                     incr_bytes[25] = (incr_abs >> 48) as u8;
