@@ -9,6 +9,7 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=cuda/GPUBech32.cu");
+    println!("cargo:rerun-if-changed=cuda/GPUBech32.h");
     println!("cargo:rerun-if-changed=cuda/GPUMath.h");
     println!("cargo:rerun-if-changed=cuda/GPUHash.h");
     println!("cargo:rerun-if-changed=cuda/GPUGroup.h");

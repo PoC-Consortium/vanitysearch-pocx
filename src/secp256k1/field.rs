@@ -14,8 +14,8 @@ pub struct FieldElement {
 
 // Field prime p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 const P: [u64; 4] = [
-    0xFFFFFFFFFFFFFC2F,
-    0xFFFFFFFFFFFFFFFE,
+    0xFFFFFFFEFFFFFC2F,  // low limb
+    0xFFFFFFFFFFFFFFFF,
     0xFFFFFFFFFFFFFFFF,
     0xFFFFFFFFFFFFFFFF,
 ];
@@ -212,35 +212,56 @@ impl FieldElement {
     /// a^(-1) = a^(p-2) mod p
     pub fn inv(&self) -> Self {
         // Use addition chain optimized for secp256k1
-        // p - 2 = FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2D
+        // p - 2 = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2D
+        //
+        // The exponent has the form: 2^256 - 2^32 - 2^9 - 2^8 - 2^7 - 2^6 - 2^4 - 1 - 2
+        //                          = 2^256 - 0x1000003D3 - 2
+        //                          = 2^256 - 0x1000003D1 - 2
+        // Wait, p = 2^256 - 0x1000003D1, so p-2 = 2^256 - 0x1000003D1 - 2 = 2^256 - 0x1000003D3
+        //
+        // Addition chain from libsecp256k1:
+        // x2 = x^(2^2-1) = x^3
+        // x3 = x^(2^3-1) = x^7
+        // x6 = x^(2^6-1) = x^63
+        // x9 = x^(2^9-1) = x^511
+        // x11 = x^(2^11-1) = x^2047
+        // x22 = x^(2^22-1)
+        // x44 = x^(2^44-1)
+        // x88 = x^(2^88-1)
+        // x176 = x^(2^176-1)
+        // x220 = x^(2^220-1)
+        // x223 = x^(2^223-1)
 
-        let x2 = self.sqr().mul_ref(self);
-        let x3 = x2.sqr().mul_ref(self);
-        let x6 = x3.sqr().sqr().sqr().mul_ref(&x3);
-        let x9 = x6.sqr().sqr().sqr().mul_ref(&x3);
-        let x11 = x9.sqr().sqr().mul_ref(&x2);
+        let x2 = self.sqr().mul_ref(self);       // x^3 = x^(2^2-1)
+        let x3 = x2.sqr().mul_ref(self);         // x^7 = x^(2^3-1)
+        let x6 = (0..3).fold(x3, |acc, _| acc.sqr()).mul_ref(&x3);  // x^63 = x^(2^6-1)
+        let x9 = (0..3).fold(x6, |acc, _| acc.sqr()).mul_ref(&x3);  // x^511 = x^(2^9-1)
+        let x11 = (0..2).fold(x9, |acc, _| acc.sqr()).mul_ref(&x2); // x^2047 = x^(2^11-1)
         let x22 = (0..11).fold(x11, |acc, _| acc.sqr()).mul_ref(&x11);
         let x44 = (0..22).fold(x22, |acc, _| acc.sqr()).mul_ref(&x22);
         let x88 = (0..44).fold(x44, |acc, _| acc.sqr()).mul_ref(&x44);
         let x176 = (0..88).fold(x88, |acc, _| acc.sqr()).mul_ref(&x88);
         let x220 = (0..44).fold(x176, |acc, _| acc.sqr()).mul_ref(&x44);
-        let x223 = x220.sqr().sqr().sqr().mul_ref(&x3);
+        let x223 = (0..3).fold(x220, |acc, _| acc.sqr()).mul_ref(&x3);
 
-        // t1 = x223 << 23
+        // Now build the final exponent: p-2 = 2^256 - 0x1000003D3
+        // In binary, the low 32 bits of p-2 are: 0xFFFFFC2D = 11111111111111111111110000101101
+        //
+        // The standard addition chain multiplies by powers using the precomputed values:
+        // t1 = x223 << 23 (shift to 246 bits) then mul x22 (add 22 1s)
+        // = x^(2^246 - 2^23 + 2^22 - 1) ... this gets complicated
+
+        // Simpler approach: compute directly for the low bits
+        // p-2 ends with ...1111111111111111111111 00001011 01
+        //                                        = fc2d in hex
+
         let t1 = (0..23).fold(x223, |acc, _| acc.sqr());
-        // t1 = t1 * x22
         let t1 = t1.mul_ref(&x22);
-        // t1 = t1 << 5
         let t1 = (0..5).fold(t1, |acc, _| acc.sqr());
-        // t1 = t1 * x
         let t1 = t1.mul_ref(self);
-        // t1 = t1 << 3
         let t1 = (0..3).fold(t1, |acc, _| acc.sqr());
-        // t1 = t1 * x2
         let t1 = t1.mul_ref(&x2);
-        // t1 = t1 << 2
-        let t1 = t1.sqr().sqr();
-        // t1 = t1 * x
+        let t1 = (0..2).fold(t1, |acc, _| acc.sqr());
         t1.mul_ref(self)
     }
 

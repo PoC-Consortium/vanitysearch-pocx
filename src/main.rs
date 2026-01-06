@@ -201,11 +201,15 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
     let engine_handle = std::sync::Arc::new(engine);
     let engine_clone = std::sync::Arc::clone(&engine_handle);
 
-    std::thread::spawn(move || {
+    let thread_handle = std::thread::spawn(move || {
         engine_clone.run(tx);
     });
 
     run_main_loop_gpu(args, rx, &engine_handle);
+
+    // Signal stop and wait for thread to finish cleanly
+    engine_handle.stop();
+    let _ = thread_handle.join();
 }
 
 trait SearchEngine {
@@ -258,27 +262,21 @@ fn run_main_loop<E: SearchEngine>(
         .as_ref()
         .map(|path| std::fs::File::create(path).expect("Failed to create output file"));
 
+    // Collect all matches for final output
+    let mut all_matches: Vec<vanitysearch_pocx::search::Match> = Vec::new();
+
     // Main loop
     loop {
         // Check for results
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(m) => {
-                let formatted = FormattedMatch::from_match(&m);
-
-                let output = match args.output_format.as_str() {
-                    "json" => formatted.to_json(),
-                    "csv" => formatted.to_csv(),
-                    _ => formatted.to_text(),
-                };
-
-                if let Some(ref mut file) = output_file {
-                    use std::io::Write;
-                    writeln!(file, "{}", output).expect("Failed to write to output file");
-                    writeln!(file).ok();
-                } else {
-                    println!("{}", output);
-                    println!();
+                // Print just the address during search
+                if !args.quiet {
+                    // Clear current line and print found address on new line
+                    eprint!("\r{:80}\r", ""); // Clear current progress line
+                    eprintln!("  Found: {}", m.address);
                 }
+                all_matches.push(m);
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -313,19 +311,55 @@ fn run_main_loop<E: SearchEngine>(
         }
     }
 
-    // Final stats
-    if !args.quiet {
-        let elapsed = start_time.elapsed().as_secs_f64();
-        let keys_checked = engine.keys_checked();
-        let matches_found = engine.matches_found();
-        let keys_per_second = keys_checked as f64 / elapsed;
+    // Wait a tiny bit for final messages
+    std::thread::sleep(Duration::from_millis(50));
 
-        eprintln!("\n");
+    // Final stats
+    let elapsed = start_time.elapsed().as_secs_f64();
+    let keys_checked = engine.keys_checked();
+    let matches_found = engine.matches_found();
+    let keys_per_second = keys_checked as f64 / elapsed;
+
+    if !args.quiet {
+        // Clear the progress line and print final stats
+        eprint!("\r{:80}\r", ""); // Clear progress line
+        eprintln!();
         eprintln!("Search completed.");
         eprintln!("Total time: {:.2}s", elapsed);
         eprintln!("Keys checked: {}", keys_checked);
         eprintln!("Average speed: {:.2} Mkey/s", keys_per_second / 1_000_000.0);
         eprintln!("Matches found: {}", matches_found);
+    }
+
+    // Output all matches with full details
+    if !all_matches.is_empty() {
+        if !args.quiet {
+            eprintln!();
+            eprintln!("{}", "=".repeat(60));
+            eprintln!("RESULTS");
+            eprintln!("{}", "=".repeat(60));
+            eprintln!();
+        }
+
+        for m in &all_matches {
+            let formatted = FormattedMatch::from_match(m);
+
+            let output = match args.output_format.as_str() {
+                "json" => formatted.to_json(),
+                "csv" => formatted.to_csv(),
+                _ => formatted.to_text(),
+            };
+
+            if let Some(ref mut file) = output_file {
+                use std::io::Write;
+                writeln!(file, "{}", output).expect("Failed to write to output file");
+                writeln!(file).ok();
+            } else {
+                // Use eprintln for consistent output stream
+                eprintln!("{}", output);
+                eprintln!();
+            }
+        }
     }
 }
 

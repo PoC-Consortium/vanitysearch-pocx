@@ -11,6 +11,9 @@ pub mod pattern;
 pub mod search;
 pub mod output;
 
+#[cfg(test)]
+mod tests;
+
 pub use config::{Network, NetworksConfig};
 pub use pattern::Pattern;
 pub use search::{CpuSearchConfig, CpuSearchEngine, Match};

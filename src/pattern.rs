@@ -17,9 +17,9 @@ const BECH32_REV: [i8; 128] = [
 #[derive(Debug, Clone)]
 pub struct FastPrefixMatcher {
     /// The 5-bit values to match (after witness version 'q')
-    prefix_5bit: Vec<u8>,
+    pub prefix_5bit: Vec<u8>,
     /// Number of 5-bit values to match
-    prefix_len: usize,
+    pub prefix_len: usize,
     /// Whether the pattern has wildcards (requires full matching)
     pub has_wildcards: bool,
 }
@@ -181,12 +181,15 @@ impl Pattern {
         }
 
         // Calculate difficulty
+        // Count concrete characters EXCLUDING the witness version 'q' at position 0
+        // since 'q' is always present for bech32 witness v0 addresses
         let concrete_chars = data_pattern
             .chars()
+            .skip(1) // Skip witness version 'q'
             .filter(|&c| c != '?' && c != '*')
             .count();
 
-        // Each bech32 character is 5 bits
+        // Each bech32 character is 5 bits (32 possible values)
         let difficulty = (32.0f64).powi(concrete_chars as i32);
 
         // Check if it's a full 42-character address (hrp + 1 + 39 data + 6 checksum)

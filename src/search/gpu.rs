@@ -87,6 +87,7 @@ mod cuda_impl {
     struct GpuMutableState {
         base_keys: Vec<Scalar>,
         keys_buffer: Vec<u8>,
+        batches_since_regen: u64, // Track batches for sequential walk optimization
     }
 
     // Safety: GpuSearchEngine is used on a single thread
@@ -151,6 +152,10 @@ mod cuda_impl {
             }
 
             // Extract pattern (after hrp + "1q")
+            // For bech32, full address is: bc1q<data><checksum>
+            // bc1 = human readable part (hrp)
+            // q = witness version (0 in bech32m = 'q')
+            // The pattern after "bc1q" is the data pattern to match
             let full_prefix = format!("{}1q", config.hrp);
             let pattern_str =
                 if let Some(stripped) = config.pattern.pattern.strip_prefix(&full_prefix) {
@@ -158,15 +163,7 @@ mod cuda_impl {
                 } else {
                     config.pattern.data_pattern.clone()
                 };
-
-            // Remove witness version 'q' if present at start
-            let pattern_str = if let Some(stripped) = pattern_str.strip_prefix('q') {
-                stripped.to_string()
-            } else {
-                pattern_str
-            };
-
-            eprintln!("[GPU] Search pattern (after bc1q): '{}'", pattern_str);
+            // Note: No additional stripping needed - "bc1q" already includes witness version
 
             // Set pattern
             let pattern_c = std::ffi::CString::new(pattern_str.as_str()).unwrap();
@@ -183,11 +180,6 @@ mod cuda_impl {
                 cuda_bech32_keys_per_launch(config.num_thread_groups, config.threads_per_group)
             };
 
-            eprintln!(
-                "[GPU] {} thread groups × {} threads × {} step × 6 endo = {} keys/launch",
-                config.num_thread_groups, config.threads_per_group, STEP_SIZE, keys_per_launch
-            );
-
             // Calculate buffer size: each thread needs 8 uint64 for (x,y) coordinates
             let total_threads = config.num_thread_groups * config.threads_per_group;
             let keys_buffer_size = total_threads as usize * 8 * 8; // 8 uint64 = 64 bytes per thread
@@ -202,12 +194,14 @@ mod cuda_impl {
                 mutable_state: Mutex::new(GpuMutableState {
                     base_keys: Vec::new(),
                     keys_buffer: vec![0u8; keys_buffer_size],
+                    batches_since_regen: 0,
                 }),
             })
         }
 
         /// Generate random starting keys and compute initial points
-        /// Uses batch derivation: compute 1 scalar mult per batch, derive rest via point addition
+        /// Threads are spaced far apart (num_threads * STEP_SIZE) to allow many sequential
+        /// kernel batches before needing to regenerate random keys.
         fn init_random_keys(&self) -> Result<(), String> {
             use rand::Rng;
             use rayon::prelude::*;
@@ -216,21 +210,25 @@ mod cuda_impl {
             let num_threads =
                 (self.config.num_thread_groups * self.config.threads_per_group) as usize;
 
-            eprintln!("[GPU] Generating {} random starting points...", num_threads);
-            let start = std::time::Instant::now();
-
-            // Use batch derivation: compute 1 scalar mult per 256 keys, derive rest via addition
-            // This reduces scalar multiplications from N to N/256
+            // Space threads by num_threads * STEP_SIZE so we can run many batches sequentially
+            // Before overlap occurs. After each kernel, GPU advances each thread by STEP_SIZE.
+            // With wide spacing, we can run num_threads batches before overlap!
             const BATCH_SIZE: usize = 256;
             let num_batches = num_threads.div_ceil(BATCH_SIZE);
 
-            // Precompute offset table: 0*G, 1*G, 2*G, ..., 255*G
+            // Thread spacing: num_threads * STEP_SIZE
+            // This allows sequential walks without overlap for many batches
+            let thread_spacing = (num_threads as u64) * (STEP_SIZE as u64);
+            let spacing_scalar = Scalar::from_u64(thread_spacing);
+            let spacing_g = G.mul(&spacing_scalar);
+
+            // Precompute offset table: 0*spacing*G, 1*spacing*G, ..., 255*spacing*G
             let offset_points: Vec<Point> = {
                 let mut table = Vec::with_capacity(BATCH_SIZE);
                 let mut p = Point::INFINITY;
                 for _ in 0..BATCH_SIZE {
                     table.push(p);
-                    p = p.add(&G);
+                    p = p.add(&spacing_g);
                 }
                 table
             };
@@ -248,12 +246,12 @@ mod cuda_impl {
             // Compute base points for each batch in parallel (expensive scalar mult)
             let batch_points: Vec<Point> = batch_scalars.par_iter().map(|key| G.mul(key)).collect();
 
-            // Now derive all keys using fast point addition
+            // Derive all keys - each thread is spaced by num_threads * STEP_SIZE
             let scalars: Vec<Scalar> = (0..num_threads)
                 .map(|i| {
                     let batch_idx = i / BATCH_SIZE;
                     let offset = i % BATCH_SIZE;
-                    let offset_scalar = Scalar::from_u64(offset as u64);
+                    let offset_scalar = spacing_scalar.mul(&Scalar::from_u64(offset as u64));
                     batch_scalars[batch_idx].add(&offset_scalar)
                 })
                 .collect();
@@ -267,7 +265,6 @@ mod cuda_impl {
                     if offset == 0 {
                         batch_points[batch_idx]
                     } else {
-                        // P + offset*G using precomputed table
                         batch_points[batch_idx].add(&offset_points[offset])
                     }
                 })
@@ -305,9 +302,8 @@ mod cuda_impl {
                 }
             }
 
-            state.base_keys = scalars;
-
-            eprintln!("[GPU] Initial point generation took {:?}", start.elapsed());
+            state.base_keys = scalars.clone();
+            state.batches_since_regen = 0;
 
             Ok(())
         }
@@ -331,6 +327,7 @@ mod cuda_impl {
         }
 
         /// Get updated keys from GPU (after kernel processes them)
+        /// Also increments batch counter for sequential walk tracking
         fn get_keys_from_gpu(&self) -> Result<(), String> {
             let mut state = self.mutable_state.lock().unwrap();
             let result = unsafe {
@@ -345,27 +342,27 @@ mod cuda_impl {
                 return Err("Failed to get keys from GPU".to_string());
             }
 
-            // Update base_keys to match GPU state
-            // After kernel: start_point += STEP_SIZE * 6 * G (approximately)
-            let step_scalar = {
-                let n = (STEP_SIZE * 6) as u64;
-                let mut bytes = [0u8; 32];
-                bytes[24] = (n >> 56) as u8;
-                bytes[25] = (n >> 48) as u8;
-                bytes[26] = (n >> 40) as u8;
-                bytes[27] = (n >> 32) as u8;
-                bytes[28] = (n >> 24) as u8;
-                bytes[29] = (n >> 16) as u8;
-                bytes[30] = (n >> 8) as u8;
-                bytes[31] = n as u8;
-                Scalar::from_bytes(&bytes)
-            };
+            // The GPU kernel advances each thread by STEP_SIZE*G
+            // Update base_keys to match
+            let step_scalar = Scalar::from_u64(STEP_SIZE as u64);
 
             for key in state.base_keys.iter_mut() {
                 *key = key.add(&step_scalar);
             }
 
+            state.batches_since_regen += 1;
+
             Ok(())
+        }
+
+        /// Check if we need to regenerate keys (approaching overlap)
+        fn needs_key_regen(&self) -> bool {
+            let num_threads =
+                (self.config.num_thread_groups * self.config.threads_per_group) as u64;
+            let state = self.mutable_state.lock().unwrap();
+            // With wide spacing of num_threads * STEP_SIZE, we can run num_threads batches
+            // before overlap. Leave some margin (90%) to be safe.
+            state.batches_since_regen >= (num_threads * 9 / 10)
         }
 
         /// Process match results from GPU
@@ -376,6 +373,7 @@ mod cuda_impl {
             results_tx: &std::sync::mpsc::Sender<Match>,
         ) {
             let state = self.mutable_state.lock().unwrap();
+
             for i in 0..match_count as usize {
                 let base = i * ITEM_SIZE32;
                 if base + ITEM_SIZE32 > results.len() {
@@ -384,7 +382,6 @@ mod cuda_impl {
 
                 let tid = results[base] as usize;
                 let info = results[base + 1];
-                // Read incr as signed 16-bit value (sign extend from upper 16 bits)
                 let incr = ((info >> 16) as i16) as i32;
                 let endo = (info & 0x7) as i32;
 
@@ -398,59 +395,49 @@ mod cuda_impl {
                     hash160[j * 4 + 3] = ((val >> 24) & 0xFF) as u8;
                 }
 
-                // Compute private key: base_key + incr (±) with endomorphism adjustment
-                if tid < state.base_keys.len() {
-                    let mut private_key = state.base_keys[tid];
+                const GRP_SIZE_HALF: i32 = 512;
 
-                    // Apply increment: for both positive and negative incr, we ADD |incr|
-                    // For negative incr, we'll negate the key later
-                    let incr_abs = if incr >= 0 {
-                        incr as u64
+                if tid < state.base_keys.len() {
+                    let base_key = state.base_keys[tid];
+                    let incr_abs = if incr >= 0 { incr } else { -incr };
+                    let offset = incr_abs - GRP_SIZE_HALF;
+
+                    let mut private_key = base_key;
+
+                    use crate::secp256k1::G;
+
+                    if offset >= 0 {
+                        private_key = private_key.add(&Scalar::from_u64(offset as u64));
                     } else {
-                        (-incr) as u64
-                    };
-                    let mut incr_bytes = [0u8; 32];
-                    incr_bytes[24] = (incr_abs >> 56) as u8;
-                    incr_bytes[25] = (incr_abs >> 48) as u8;
-                    incr_bytes[26] = (incr_abs >> 40) as u8;
-                    incr_bytes[27] = (incr_abs >> 32) as u8;
-                    incr_bytes[28] = (incr_abs >> 24) as u8;
-                    incr_bytes[29] = (incr_abs >> 16) as u8;
-                    incr_bytes[30] = (incr_abs >> 8) as u8;
-                    incr_bytes[31] = incr_abs as u8;
-                    private_key = private_key.add(&Scalar::from_bytes(&incr_bytes));
+                        private_key = private_key.sub(&Scalar::from_u64((-offset) as u64));
+                    }
 
                     // Apply endomorphism adjustment
-                    // For endo=1: k' = k * lambda1 mod n
-                    // For endo=2: k' = k * lambda2 mod n
-                    // Where lambda1 and lambda2 are cube roots of unity mod n
                     if endo == 1 {
-                        // lambda1 = 0x5363ad4cc05c30e0a5261c028812645a122e22ea20816678df02967c1b23bd72
                         let lambda1_bytes: [u8; 32] = [
                             0x53, 0x63, 0xad, 0x4c, 0xc0, 0x5c, 0x30, 0xe0, 0xa5, 0x26, 0x1c, 0x02,
                             0x88, 0x12, 0x64, 0x5a, 0x12, 0x2e, 0x22, 0xea, 0x20, 0x81, 0x66, 0x78,
                             0xdf, 0x02, 0x96, 0x7c, 0x1b, 0x23, 0xbd, 0x72,
                         ];
-                        let lambda1 = Scalar::from_bytes(&lambda1_bytes);
-                        private_key = private_key.mul(&lambda1);
+                        private_key = private_key.mul(&Scalar::from_bytes(&lambda1_bytes));
                     } else if endo == 2 {
-                        // lambda2 = lambda1^2 mod n
                         let lambda2_bytes: [u8; 32] = [
                             0xac, 0x9c, 0x52, 0xb3, 0x3f, 0xa3, 0xcf, 0x1f, 0x5a, 0xd9, 0xe3, 0xfd,
                             0x77, 0xed, 0x9b, 0xa4, 0xa8, 0x80, 0xb9, 0xfc, 0x8e, 0xc7, 0x39, 0xc2,
-                            0xe0, 0xcf, 0xc8, 0x10, 0xb5, 0x12, 0x83, 0xcf,
+                            0xe0, 0xcf, 0xc8, 0x10, 0xb5, 0x12, 0x83, 0xce,
                         ];
-                        let lambda2 = Scalar::from_bytes(&lambda2_bytes);
-                        private_key = private_key.mul(&lambda2);
+                        private_key = private_key.mul(&Scalar::from_bytes(&lambda2_bytes));
                     }
 
-                    // If negative increment was used, we need to negate the key
-                    // (because we're using the -y version of the point)
-                    if incr < 0 {
+                    // Check y-parity and negate if needed
+                    let gpu_wants_odd_y = incr < 0;
+                    let pubpoint = G.mul(&private_key);
+                    let scalar_has_odd_y = pubpoint.y.d[0] & 1 != 0;
+
+                    if gpu_wants_odd_y != scalar_has_odd_y {
                         private_key = private_key.neg();
                     }
 
-                    // Create address from hash160
                     let address = crate::bech32::address_from_hash160(&self.config.hrp, &hash160);
 
                     let m = Match {
@@ -467,11 +454,6 @@ mod cuda_impl {
 
         /// Run the search
         pub fn run(&self, results_tx: std::sync::mpsc::Sender<Match>) {
-            eprintln!(
-                "[GPU] Starting search: {} blocks × {} threads",
-                self.config.num_thread_groups, self.config.threads_per_group
-            );
-
             let start_time = std::time::Instant::now();
             let max_found = 65536i32;
 
@@ -483,13 +465,13 @@ mod cuda_impl {
 
             // Initialize random starting keys
             if let Err(e) = self.init_random_keys() {
-                eprintln!("[GPU] Error initializing keys: {}", e);
+                eprintln!("Error initializing keys: {}", e);
                 return;
             }
 
             // Copy initial keys to GPU
             if let Err(e) = self.copy_keys_to_gpu() {
-                eprintln!("[GPU] Error copying initial keys: {}", e);
+                eprintln!("Error copying initial keys: {}", e);
                 return;
             }
 
@@ -510,20 +492,20 @@ mod cuda_impl {
 
                 // Clear output buffer
                 if unsafe { cuda_bech32_clear_output(self.ctx) } != 0 {
-                    eprintln!("[GPU] Failed to clear output buffer");
+                    eprintln!("Failed to clear output buffer");
                     break;
                 }
 
                 // Launch kernel
                 let launch_result = unsafe { cuda_bech32_launch(self.ctx, max_found) };
                 if launch_result != 0 {
-                    eprintln!("[GPU] Kernel launch failed with code {}", launch_result);
+                    eprintln!("Kernel launch failed with code {}", launch_result);
                     break;
                 }
 
                 // Synchronize
                 if unsafe { cuda_bech32_sync() } != 0 {
-                    eprintln!("[GPU] CUDA sync failed");
+                    eprintln!("CUDA sync failed");
                     break;
                 }
 
@@ -538,7 +520,7 @@ mod cuda_impl {
                 };
 
                 if get_result != 0 {
-                    eprintln!("[GPU] Failed to get results");
+                    eprintln!("Failed to get results");
                     break;
                 }
 
@@ -552,33 +534,29 @@ mod cuda_impl {
                     .fetch_add(self.keys_per_launch, Ordering::Relaxed);
                 batch_count += 1;
 
-                // Progress report every second
+                // Progress report every second (handled by main loop, but keep minimal here)
                 if last_report.elapsed().as_secs() >= 1 {
-                    let elapsed = start_time.elapsed().as_secs_f64();
-                    let keys = self.keys_checked.load(Ordering::Relaxed);
-                    let rate = keys as f64 / elapsed / 1_000_000.0;
-                    let matches = self.matches_found.load(Ordering::Relaxed);
-                    eprintln!(
-                        "[{:.1}s] {:.2} Mkey/s | {} keys checked | {} matches",
-                        elapsed, rate, keys, matches
-                    );
                     last_report = std::time::Instant::now();
                 }
 
-                // Get updated keys from GPU (kernel advances the starting points)
+                // Sequential walk: get updated keys from GPU and check if regeneration needed
                 if let Err(e) = self.get_keys_from_gpu() {
-                    eprintln!("[GPU] Error getting updated keys: {}", e);
+                    eprintln!("Error getting updated keys: {}", e);
                     break;
                 }
-            }
 
-            let elapsed = start_time.elapsed().as_secs_f64();
-            let keys = self.keys_checked.load(Ordering::Relaxed);
-            let rate = keys as f64 / elapsed / 1_000_000.0;
-            eprintln!(
-                "[GPU] Search completed: {} batches, {:.2} Mkey/s average",
-                batch_count, rate
-            );
+                // Only regenerate when approaching overlap (every ~num_threads batches)
+                if self.needs_key_regen() {
+                    if let Err(e) = self.init_random_keys() {
+                        eprintln!("Error regenerating keys: {}", e);
+                        break;
+                    }
+                    if let Err(e) = self.copy_keys_to_gpu() {
+                        eprintln!("Error copying new keys to GPU: {}", e);
+                        break;
+                    }
+                }
+            }
         }
 
         pub fn stop(&self) {

@@ -42,6 +42,23 @@
             "cwd": "${workspaceFolder}"
         },
         {
+            "name": "Run CPU evlseed (DBG)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=vanitysearch-pocx"
+                ]
+            },
+            "args": [
+                "bc1qevlseed",
+                "-T",
+                "60",
+            ],
+            "cwd": "${workspaceFolder}"
+        },
+        {
             "name": "Debug unit tests in executable 'vanitysearch-pocx'",
             "type": "lldb",
             "request": "launch",

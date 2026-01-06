@@ -307,9 +307,13 @@ __device__ void ComputeKeysBech32(
         ModSub256(py, _2Gnx, px);
         _ModMult(py, _s);
         ModSub256(py, _2Gny);
+
+        // Update sx, sy for next group iteration
+        Load256(sx, px);
+        Load256(sy, py);
     }
 
-    // Update starting point
+    // Update starting point for next kernel launch
     __syncthreads();
     Store256A(startx, px);
     Store256A(starty, py);

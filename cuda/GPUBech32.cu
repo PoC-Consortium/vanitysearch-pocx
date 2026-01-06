@@ -25,14 +25,16 @@
 #include "GPUHash.h"
 #include "GPUBech32.h"
 
+// Constant memory for pattern (fast, cached)
+__constant__ uint8_t d_pattern_const[32];
+__constant__ int d_pattern_len;
+
 // ---------------------------------------------------------------------------------------
 // Kernel entry point for bech32 search
 // ---------------------------------------------------------------------------------------
 
 __global__ void bech32_search_kernel(
     uint64_t *keys,           // Input: starting points (x, y interleaved)
-    uint8_t *pattern5bit,     // Pattern converted to 5-bit values
-    int patternLen,           // Pattern length in 5-bit values
     uint32_t maxFound,        // Max matches to record
     uint32_t *found           // Output: match count + match data
 ) {
@@ -41,8 +43,8 @@ __global__ void bech32_search_kernel(
     ComputeKeysBech32(
         keys + xPtr, 
         keys + yPtr, 
-        pattern5bit, 
-        patternLen, 
+        d_pattern_const,  // Use constant memory
+        d_pattern_len,    // Use constant memory
         maxFound, 
         found
     );
@@ -245,8 +247,22 @@ int cuda_bech32_set_pattern(GpuContext *ctx, const char *pattern, int len) {
     
     ctx->patternLen = len;
     
-    // Copy to device
-    cudaError_t err = cudaMemcpy(ctx->d_pattern, pattern5bit, 32, cudaMemcpyHostToDevice);
+    // Copy pattern to constant memory (fast, cached)
+    cudaError_t err = cudaMemcpyToSymbol(d_pattern_const, pattern5bit, 32);
+    if (err != cudaSuccess) {
+        printf("CUDA Error: Failed to copy pattern to constant memory: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+    
+    // Copy pattern length to constant memory
+    err = cudaMemcpyToSymbol(d_pattern_len, &len, sizeof(int));
+    if (err != cudaSuccess) {
+        printf("CUDA Error: Failed to copy pattern length to constant memory: %s\n", cudaGetErrorString(err));
+        return -1;
+    }
+    
+    // Also keep in global memory for backward compatibility
+    err = cudaMemcpy(ctx->d_pattern, pattern5bit, 32, cudaMemcpyHostToDevice);
     return (err == cudaSuccess) ? 0 : -1;
 }
 
@@ -280,8 +296,6 @@ int cuda_bech32_launch(GpuContext *ctx, int maxFound) {
     
     bech32_search_kernel<<<grid, block>>>(
         ctx->d_keys,
-        ctx->d_pattern,
-        ctx->patternLen,
         maxFound,
         ctx->d_output
     );
@@ -342,3 +356,6 @@ uint64_t cuda_bech32_keys_per_launch(int numThreadGroups, int threadsPerGroup) {
 }
 
 } // extern "C"
+
+ 
+ 
