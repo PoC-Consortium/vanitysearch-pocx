@@ -5,13 +5,12 @@
 mod cuda_impl {
     use crate::pattern::Pattern;
     use crate::search::Match;
-    use crate::secp256k1::{FieldElement, Point, Scalar, G};
+    use crate::secp256k1::{Point, Scalar, G};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Arc;
 
     // Constants matching VanitySearch
-    const GRP_SIZE: usize = 1024;
-    const STEP_SIZE: usize = 8192; // Keys per thread per kernel launch (increased from 4096)
+    const STEP_SIZE: usize = 16384; // Keys per thread per kernel launch
     const ITEM_SIZE32: usize = 8; // Match result size in u32s
 
     // FFI functions from GPUBech32.cu
@@ -153,15 +152,15 @@ mod cuda_impl {
 
             // Extract pattern (after hrp + "1q")
             let full_prefix = format!("{}1q", config.hrp);
-            let pattern_str = if config.pattern.pattern.starts_with(&full_prefix) {
-                config.pattern.pattern[full_prefix.len()..].to_string()
+            let pattern_str = if let Some(stripped) = config.pattern.pattern.strip_prefix(&full_prefix) {
+                stripped.to_string()
             } else {
                 config.pattern.data_pattern.clone()
             };
 
             // Remove witness version 'q' if present at start
-            let pattern_str = if pattern_str.starts_with('q') {
-                pattern_str[1..].to_string()
+            let pattern_str = if let Some(stripped) = pattern_str.strip_prefix('q') {
+                stripped.to_string()
             } else {
                 pattern_str
             };
@@ -207,6 +206,7 @@ mod cuda_impl {
         }
 
         /// Generate random starting keys and compute initial points
+        /// Uses batch derivation: compute 1 scalar mult per batch, derive rest via point addition
         fn init_random_keys(&self) -> Result<(), String> {
             use rand::Rng;
             use rayon::prelude::*;
@@ -218,27 +218,59 @@ mod cuda_impl {
             eprintln!("[GPU] Generating {} random starting points...", num_threads);
             let start = std::time::Instant::now();
 
-            // Generate random starting scalars
-            let scalars: Vec<Scalar> = (0..num_threads)
-                .map(|i| {
+            // Use batch derivation: compute 1 scalar mult per 256 keys, derive rest via addition
+            // This reduces scalar multiplications from N to N/256
+            const BATCH_SIZE: usize = 256;
+            let num_batches = num_threads.div_ceil(BATCH_SIZE);
+
+            // Precompute offset table: 0*G, 1*G, 2*G, ..., 255*G
+            let offset_points: Vec<Point> = {
+                let mut table = Vec::with_capacity(BATCH_SIZE);
+                let mut p = Point::INFINITY;
+                for _ in 0..BATCH_SIZE {
+                    table.push(p);
+                    p = p.add(&G);
+                }
+                table
+            };
+
+            // Generate one random scalar per batch
+            let batch_scalars: Vec<Scalar> = (0..num_batches)
+                .map(|_| {
                     let mut bytes = [0u8; 32];
                     rng.fill(&mut bytes);
                     bytes[0] &= 0x7F; // Ensure valid scalar
-                    let mut s = Scalar::from_bytes(&bytes);
-                    // Add thread index to ensure uniqueness
-                    let mut i_bytes = [0u8; 32];
-                    i_bytes[31] = (i & 0xFF) as u8;
-                    i_bytes[30] = ((i >> 8) & 0xFF) as u8;
-                    i_bytes[29] = ((i >> 16) & 0xFF) as u8;
-                    i_bytes[28] = ((i >> 24) & 0xFF) as u8;
-                    let i_scalar = Scalar::from_bytes(&i_bytes);
-                    s = s.add(&i_scalar);
-                    s
+                    Scalar::from_bytes(&bytes)
                 })
                 .collect();
 
-            // Compute initial points in parallel (scalar multiplication)
-            let points: Vec<Point> = scalars.par_iter().map(|key| G.mul(key)).collect();
+            // Compute base points for each batch in parallel (expensive scalar mult)
+            let batch_points: Vec<Point> = batch_scalars.par_iter().map(|key| G.mul(key)).collect();
+
+            // Now derive all keys using fast point addition
+            let scalars: Vec<Scalar> = (0..num_threads)
+                .map(|i| {
+                    let batch_idx = i / BATCH_SIZE;
+                    let offset = i % BATCH_SIZE;
+                    let offset_scalar = Scalar::from_u64(offset as u64);
+                    batch_scalars[batch_idx].add(&offset_scalar)
+                })
+                .collect();
+
+            // Derive all points from batch points using addition (much faster than scalar mult)
+            let points: Vec<Point> = (0..num_threads)
+                .into_par_iter()
+                .map(|i| {
+                    let batch_idx = i / BATCH_SIZE;
+                    let offset = i % BATCH_SIZE;
+                    if offset == 0 {
+                        batch_points[batch_idx]
+                    } else {
+                        // P + offset*G using precomputed table
+                        batch_points[batch_idx].add(&offset_points[offset])
+                    }
+                })
+                .collect();
 
             // Pack points into buffer for GPU using VanitySearch memory layout (SoA)
             // For memory coalescing, layout is per thread group:
@@ -351,7 +383,8 @@ mod cuda_impl {
 
                 let tid = results[base] as usize;
                 let info = results[base + 1];
-                let incr = (info >> 16) as i32;
+                // Read incr as signed 16-bit value (sign extend from upper 16 bits)
+                let incr = ((info >> 16) as i16) as i32;
                 let endo = (info & 0x7) as i32;
 
                 // Extract hash160 from results
@@ -366,34 +399,21 @@ mod cuda_impl {
 
                 // Compute private key: base_key + incr (±) with endomorphism adjustment
                 if tid < state.base_keys.len() {
-                    let mut private_key = state.base_keys[tid].clone();
+                    let mut private_key = state.base_keys[tid];
 
-                    // Apply increment
-                    if incr >= 0 {
-                        let mut incr_bytes = [0u8; 32];
-                        let incr_val = incr as u64;
-                        incr_bytes[24] = (incr_val >> 56) as u8;
-                        incr_bytes[25] = (incr_val >> 48) as u8;
-                        incr_bytes[26] = (incr_val >> 40) as u8;
-                        incr_bytes[27] = (incr_val >> 32) as u8;
-                        incr_bytes[28] = (incr_val >> 24) as u8;
-                        incr_bytes[29] = (incr_val >> 16) as u8;
-                        incr_bytes[30] = (incr_val >> 8) as u8;
-                        incr_bytes[31] = incr_val as u8;
-                        private_key = private_key.add(&Scalar::from_bytes(&incr_bytes));
-                    } else {
-                        let mut incr_bytes = [0u8; 32];
-                        let incr_val = (-incr) as u64;
-                        incr_bytes[24] = (incr_val >> 56) as u8;
-                        incr_bytes[25] = (incr_val >> 48) as u8;
-                        incr_bytes[26] = (incr_val >> 40) as u8;
-                        incr_bytes[27] = (incr_val >> 32) as u8;
-                        incr_bytes[28] = (incr_val >> 24) as u8;
-                        incr_bytes[29] = (incr_val >> 16) as u8;
-                        incr_bytes[30] = (incr_val >> 8) as u8;
-                        incr_bytes[31] = incr_val as u8;
-                        private_key = private_key.sub(&Scalar::from_bytes(&incr_bytes));
-                    }
+                    // Apply increment: for both positive and negative incr, we ADD |incr|
+                    // For negative incr, we'll negate the key later
+                    let incr_abs = if incr >= 0 { incr as u64 } else { (-incr) as u64 };
+                    let mut incr_bytes = [0u8; 32];
+                    incr_bytes[24] = (incr_abs >> 56) as u8;
+                    incr_bytes[25] = (incr_abs >> 48) as u8;
+                    incr_bytes[26] = (incr_abs >> 40) as u8;
+                    incr_bytes[27] = (incr_abs >> 32) as u8;
+                    incr_bytes[28] = (incr_abs >> 24) as u8;
+                    incr_bytes[29] = (incr_abs >> 16) as u8;
+                    incr_bytes[30] = (incr_abs >> 8) as u8;
+                    incr_bytes[31] = incr_abs as u8;
+                    private_key = private_key.add(&Scalar::from_bytes(&incr_bytes));
 
                     // Apply endomorphism adjustment
                     // For endo=1: k' = k * lambda1 mod n

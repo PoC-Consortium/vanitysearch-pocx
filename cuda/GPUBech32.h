@@ -12,9 +12,9 @@
 #define GPUBECH32_H
 
 // STEP_SIZE: number of keys processed per thread per kernel launch
-// Increased from 1024 to 8192 to do more work per thread
+// 16384 provides good balance
 #ifndef STEP_SIZE
-#define STEP_SIZE 8192
+#define STEP_SIZE 16384
 #endif
 
 // Bech32 charset: qpzry9x8gf2tvdw0s3jn54khce6mua7l
@@ -86,9 +86,8 @@ __device__ __forceinline__ void _Hash160ToBech32Data(uint32_t *h, uint8_t *out) 
     }
 }
 
-// Fast pattern check for bech32 - works on 5-bit values
+// Fast pattern check for bech32 - optimized inline version
 // Pattern is pre-converted to 5-bit values on host
-// Returns true if hash160 matches the pattern
 __device__ __forceinline__ bool _CheckBech32Pattern(
     uint32_t *h,           // hash160 (5 x uint32)
     uint8_t *pattern5bit,  // Pattern as 5-bit values
@@ -96,58 +95,60 @@ __device__ __forceinline__ bool _CheckBech32Pattern(
 ) {
     if (patternLen == 0) return true;
     
-    uint8_t bech32Data[32];
-    _Hash160ToBech32Data(h, bech32Data);
-    
-    #pragma unroll 8
-    for (int i = 0; i < patternLen && i < 32; i++) {
-        if (bech32Data[i] != pattern5bit[i]) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Optimized version: check pattern directly from hash160 bits
-// Avoids full conversion when pattern is short
-__device__ __forceinline__ bool _CheckBech32PatternFast(
-    uint32_t *h,           // hash160 (5 x uint32)
-    uint32_t pattern32,    // First 6 chars of pattern packed (30 bits)
-    int patternLen         // Length in 5-bit chars (max 6 for this version)
-) {
-    if (patternLen == 0) return true;
-    
-    // Extract first 32 bits of hash160 (little-endian)
+    // Extract first 4 bytes and compute first 6 bech32 chars for quick reject
     uint32_t h0 = h[0];
-    uint32_t h1 = h[1];
-    
-    // Build first 32 bits worth of 5-bit values
-    // We need bytes in big-endian order for bech32
     uint8_t b0 = h0 & 0xFF;
     uint8_t b1 = (h0 >> 8) & 0xFF;
     uint8_t b2 = (h0 >> 16) & 0xFF;
     uint8_t b3 = (h0 >> 24) & 0xFF;
     
-    // Convert first ~6 characters worth (30 bits = 6 chars @ 5 bits)
-    // char0 = bits [0-4] of b0  -> b0 >> 3
-    // char1 = bits [5-7] of b0 + bits [0-1] of b1 -> ((b0 & 0x7) << 2) | (b1 >> 6)
-    // etc.
-    
+    // Combine to big-endian 32-bit for bit extraction
     uint32_t data32 = ((uint32_t)b0 << 24) | ((uint32_t)b1 << 16) | ((uint32_t)b2 << 8) | b3;
     
-    // Extract 5-bit values from data32
-    uint32_t extracted = 0;
-    extracted |= ((data32 >> 27) & 0x1F) << 25;  // char 0
-    extracted |= ((data32 >> 22) & 0x1F) << 20;  // char 1
-    extracted |= ((data32 >> 17) & 0x1F) << 15;  // char 2
-    extracted |= ((data32 >> 12) & 0x1F) << 10;  // char 3
-    extracted |= ((data32 >> 7) & 0x1F) << 5;    // char 4
-    extracted |= ((data32 >> 2) & 0x1F);         // char 5
+    // Check first char (5 bits from top)
+    if (((data32 >> 27) & 0x1F) != pattern5bit[0]) return false;
+    if (patternLen == 1) return true;
     
-    // Mask based on pattern length
-    uint32_t mask = 0xFFFFFFFF << (30 - patternLen * 5);
+    // Check second char
+    if (((data32 >> 22) & 0x1F) != pattern5bit[1]) return false;
+    if (patternLen == 2) return true;
     
-    return (extracted & mask) == (pattern32 & mask);
+    // Check third char
+    if (((data32 >> 17) & 0x1F) != pattern5bit[2]) return false;
+    if (patternLen == 3) return true;
+    
+    // Check fourth char
+    if (((data32 >> 12) & 0x1F) != pattern5bit[3]) return false;
+    if (patternLen == 4) return true;
+    
+    // Check fifth char
+    if (((data32 >> 7) & 0x1F) != pattern5bit[4]) return false;
+    if (patternLen == 5) return true;
+    
+    // Check sixth char
+    if (((data32 >> 2) & 0x1F) != pattern5bit[5]) return false;
+    if (patternLen == 6) return true;
+    
+    // For patterns > 6 chars, continue with remaining bytes
+    uint32_t acc = data32 & 0x3;  // Remaining 2 bits from data32
+    int bits = 2;
+    int byteIdx = 4;  // Start from 5th byte (h[1])
+    
+    for (int i = 6; i < patternLen && i < 32; i++) {
+        while (bits < 5 && byteIdx < 20) {
+            uint32_t word = h[byteIdx >> 2];
+            int shift = (byteIdx & 3) << 3;
+            uint8_t b = (word >> shift) & 0xFF;
+            acc = (acc << 8) | b;
+            bits += 8;
+            byteIdx++;
+        }
+        bits -= 5;
+        if (((acc >> bits) & 0x1F) != pattern5bit[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 // Item size for results (matching VanitySearch format)

@@ -133,6 +133,7 @@ fn batch_inverse(vals: &[FieldElement]) -> Vec<FieldElement> {
 /// Check address and potentially record match
 /// Uses fast hash160 prefix matching to avoid full bech32 encoding
 #[inline]
+#[allow(clippy::too_many_arguments)]
 fn check_point_and_record(
     x: &FieldElement,
     y: &FieldElement,
@@ -163,11 +164,10 @@ fn check_point_and_record(
     let address = bech32::address_from_hash160(hrp, &h160);
     
     // If pattern has wildcards, need to do full match
-    if pattern.fast_matcher.has_wildcards {
-        if !pattern.matches(&address) {
+    if pattern.fast_matcher.has_wildcards
+        && !pattern.matches(&address) {
             return;
         }
-    }
     
     let mut match_key = *base_key;
     match_key.add_assign(key_offset);

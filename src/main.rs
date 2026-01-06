@@ -162,7 +162,7 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
         eprintln!("GPU: {} SMs, auto-configured {} threads", sm_count, optimal);
         optimal
     } else {
-        args.gpu_threads as i32
+        args.gpu_threads
     };
 
     // Create GPU search config
@@ -172,7 +172,7 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
     let threads_per_block = if args.gpu_block_size == 0 {
         256
     } else {
-        args.gpu_block_size as i32
+        args.gpu_block_size
     };
     let num_blocks = (gpu_threads as i32) / threads_per_block;
 
@@ -205,7 +205,7 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern) {
         engine_clone.run(tx);
     });
 
-    run_main_loop_gpu(args, rx, &*engine_handle);
+    run_main_loop_gpu(args, rx, &engine_handle);
 }
 
 trait SearchEngine {

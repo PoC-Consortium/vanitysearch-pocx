@@ -13,9 +13,6 @@ const BECH32_REV: [i8; 128] = [
      1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1,  // p-z
 ];
 
-/// Bech32 charset (5-bit value -> char)
-const BECH32_CHARS: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-
 /// Fast prefix matcher for hash160 bytes
 /// Pre-computes the pattern as 5-bit values for direct matching
 #[derive(Debug, Clone)]
@@ -39,7 +36,7 @@ impl FastPrefixMatcher {
         if has_wildcards {
             // Find prefix before first wildcard
             let end = chars.iter().position(|&c| c == '?' || c == '*').unwrap_or(chars.len());
-            let prefix_chars: Vec<char> = chars[..end].iter().cloned().collect();
+            let prefix_chars: Vec<char> = chars[..end].to_vec();
             
             // Skip witness version 'q' at position 0
             let prefix_5bit: Vec<u8> = if prefix_chars.len() > 1 {
@@ -98,15 +95,15 @@ impl FastPrefixMatcher {
         // Convert hash160 to 5-bit values on the fly
         // We only need to convert enough bits to check the prefix
         let bits_needed = self.prefix_len * 5;
-        let bytes_needed = (bits_needed + 7) / 8;
+        let bytes_needed = bits_needed.div_ceil(8);
         
         // Extract 5-bit values from hash160
         let mut acc: u32 = 0;
         let mut bits: u32 = 0;
         let mut idx = 0;
         
-        for i in 0..bytes_needed.min(20) {
-            acc = (acc << 8) | (hash160[i] as u32);
+        for &byte in hash160.iter().take(bytes_needed.min(20)) {
+            acc = (acc << 8) | (byte as u32);
             bits += 8;
             
             while bits >= 5 && idx < self.prefix_len {
@@ -237,7 +234,7 @@ impl Pattern {
     
     /// Get pattern prefix (characters before first wildcard)
     pub fn prefix(&self) -> &str {
-        let end = self.data_pattern.find(|c| c == '?' || c == '*')
+        let end = self.data_pattern.find(['?', '*'])
             .unwrap_or(self.data_pattern.len());
         &self.data_pattern[..end]
     }

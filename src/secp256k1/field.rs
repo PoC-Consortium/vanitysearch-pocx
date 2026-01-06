@@ -1,6 +1,8 @@
 //! secp256k1 field element arithmetic (mod p)
 //! p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
 
+#![allow(clippy::needless_range_loop)] // Indexed loops clearer for low-level math
+
 use std::ops::{Add, Sub, Mul, Neg};
 
 /// Prime field element for secp256k1

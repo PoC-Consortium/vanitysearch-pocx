@@ -1,6 +1,8 @@
 //! secp256k1 scalar arithmetic (mod n)
 //! n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
+#![allow(clippy::needless_range_loop)] // Indexed loops clearer for low-level math
+
 use std::ops::{Add, Sub, Mul, Neg};
 
 /// Scalar element for secp256k1 (private key domain)
@@ -33,6 +35,11 @@ impl Scalar {
     #[inline]
     pub fn new(d: [u64; 4]) -> Self {
         Self { d }
+    }
+
+    #[inline]
+    pub fn from_u64(val: u64) -> Self {
+        Self { d: [val, 0, 0, 0] }
     }
 
     #[inline]

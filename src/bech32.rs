@@ -81,7 +81,7 @@ pub fn encode(hrp: &str, data: &[u8]) -> String {
 
 /// Convert 8-bit data to 5-bit data
 pub fn convert_bits_8_to_5(data: &[u8]) -> Vec<u8> {
-    let mut result = Vec::with_capacity((data.len() * 8 + 4) / 5);
+    let mut result = Vec::with_capacity((data.len() * 8).div_ceil(5));
     let mut acc = 0u32;
     let mut bits = 0;
     
@@ -122,7 +122,7 @@ pub fn convert_bits_5_to_8(data: &[u8]) -> Vec<u8> {
 
 /// Encode a SegWit address (witness version 0)
 pub fn segwit_encode(hrp: &str, witness_version: u8, witness_program: &[u8]) -> String {
-    let mut data = Vec::with_capacity(1 + (witness_program.len() * 8 + 4) / 5);
+    let mut data = Vec::with_capacity(1 + (witness_program.len() * 8).div_ceil(5));
     data.push(witness_version);
     data.extend(convert_bits_8_to_5(witness_program));
     

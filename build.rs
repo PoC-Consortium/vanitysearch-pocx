@@ -35,7 +35,7 @@ fn build_cuda() {
     let vswhere_output = std::process::Command::new(
         "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe",
     )
-    .args(&[
+    .args([
         "-latest",
         "-products",
         "*",
@@ -90,14 +90,14 @@ nvcc -c cuda\GPUBech32.cu -o "{}" --generate-code arch=compute_75,code=sm_75 --g
         std::fs::write(&bat_path, bat_script).expect("Failed to write build script");
 
         std::process::Command::new("cmd")
-            .args(&["/C", &bat_path])
+            .args(["/C", &bat_path])
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit())
             .status()
     } else {
         eprintln!("Warning: Could not find Visual Studio. Trying direct nvcc...");
         std::process::Command::new("nvcc")
-            .args(&[
+            .args([
                 "-c",
                 "cuda/GPUBech32.cu",
                 "-o",
@@ -156,11 +156,11 @@ lib /OUT:"{}" "{}"
         std::fs::write(&bat_path, bat_script).expect("Failed to write lib build script");
 
         std::process::Command::new("cmd")
-            .args(&["/C", &bat_path])
+            .args(["/C", &bat_path])
             .status()
     } else {
         std::process::Command::new("lib")
-            .args(&[&format!("/OUT:{}", lib_file), &obj_file])
+            .args([&format!("/OUT:{}", lib_file), &obj_file])
             .status()
     };
 
