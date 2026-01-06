@@ -1,0 +1,19 @@
+[[networks]]
+name = "POCX"
+hrp = "pocx1q"
+is_mainnet = true
+
+[[networks]]
+name = "POCX"
+hrp = "tpocx1q"
+is_mainnet = false
+
+[[networks]]
+name = "Bitcoin"
+hrp = "bc"
+is_mainnet = true
+
+[[networks]]
+name = "Bitcoin"
+hrp = "tb"
+is_mainnet = false
