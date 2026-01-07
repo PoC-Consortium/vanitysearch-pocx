@@ -1,0 +1,12 @@
+Cargo.lock
+.vscode/
+target
+*.obj
+*.lib
+*.dll
+*.exe
+*.pdb
+
+# Local development documentation
+AGENTS.md
+IMPLEMENTATION.md

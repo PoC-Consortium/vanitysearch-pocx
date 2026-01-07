@@ -1,0 +1,43 @@
+[package]
+name = "vanitysearch-pocx"
+version = "0.5.0"
+edition = "2021"
+authors = ["VanitySearch-POCX Contributors"]
+description = "Bech32 vanity address generator with GPU support (CUDA/OpenCL)"
+license = "GPL-3.0"
+
+[features]
+default = ["cuda", "opencl"]
+cuda = []
+opencl = ["ocl"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+rayon = "1.10"
+num_cpus = "1.16"
+rand = "0.8"
+hex = "0.4"
+sha2 = "0.10"
+ripemd = "0.1"
+ocl = { version = "0.19", optional = true }
+
+[build-dependencies]
+cc = "1.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+debug = false
+overflow-checks = false
+
+[[bin]]
+name = "vanitysearch-pocx"
+path = "src/main.rs"
+
+[lib]
+name = "vanitysearch_pocx"
+path = "src/lib.rs"

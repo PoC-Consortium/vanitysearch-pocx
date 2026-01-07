@@ -1,0 +1,29 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+target/
+*.obj
+*.lib
+*.dll
+*.exe
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+
+# Documentation (local only)
+AGENTS.md
+IMPLEMENTATION.md
+
+# Test outputs
+*.txt
+tests/
+
+# Rust
+Cargo.lock
+
+# CI
+.github/
