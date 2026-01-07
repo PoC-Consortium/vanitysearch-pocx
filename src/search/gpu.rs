@@ -460,7 +460,6 @@ mod cuda_impl {
             // Result buffer
             let mut results: Vec<u32> = vec![0u32; (max_found as usize) * ITEM_SIZE32];
             let mut match_count: u32 = 0;
-            let mut batch_count = 0u64;
             let mut last_report = std::time::Instant::now();
 
             // Initialize random starting keys
@@ -532,7 +531,6 @@ mod cuda_impl {
                 // Update stats
                 self.keys_checked
                     .fetch_add(self.keys_per_launch, Ordering::Relaxed);
-                batch_count += 1;
 
                 // Progress report every second (handled by main loop, but keep minimal here)
                 if last_report.elapsed().as_secs() >= 1 {

@@ -8,6 +8,8 @@ use vanitysearch_pocx::{
 };
 #[cfg(feature = "cuda")]
 use vanitysearch_pocx::{GpuSearchConfig, GpuSearchEngine};
+#[cfg(feature = "opencl")]
+use vanitysearch_pocx::{OpenClSearchConfig, OpenClSearchEngine};
 
 #[derive(Parser, Debug)]
 #[command(name = "vanitysearch-pocx")]
@@ -30,7 +32,7 @@ struct Args {
     #[arg(short = 'm', long, default_value = "0")]
     max_found: u64,
 
-    /// Use GPU (CUDA) mode
+    /// Use GPU mode (auto-detects CUDA, falls back to OpenCL)
     #[arg(short = 'g', long)]
     gpu: bool,
 
@@ -46,6 +48,18 @@ struct Args {
     #[arg(long, default_value = "256")]
     gpu_block_size: i32,
 
+    /// Force OpenCL mode (overrides CUDA detection)
+    #[arg(long)]
+    opencl: bool,
+
+    /// OpenCL platform ID
+    #[arg(long, default_value = "0")]
+    opencl_platform: usize,
+
+    /// OpenCL number of work items (default: 65536)
+    #[arg(long, default_value = "65536")]
+    opencl_threads: usize,
+
     /// Output format: text, json, csv
     #[arg(short = 'o', long, default_value = "text")]
     output_format: String,
@@ -57,6 +71,10 @@ struct Args {
     /// Quiet mode (no progress output)
     #[arg(short = 'q', long)]
     quiet: bool,
+
+    /// Verbose mode (print full details for each match immediately)
+    #[arg(short = 'v', long)]
+    verbose: bool,
 }
 
 fn main() {
@@ -96,8 +114,30 @@ fn main() {
         eprintln!();
     }
 
-    if args.gpu {
-        run_gpu_search(&args, pattern, networks);
+    // Determine GPU mode: --opencl forces OpenCL, -g tries CUDA first then OpenCL
+    if args.opencl || args.gpu {
+        // --opencl flag forces OpenCL mode
+        if args.opencl {
+            run_opencl_search(&args, pattern, networks);
+        } else {
+            // -g flag: Try CUDA first, fallback to OpenCL if CUDA unavailable
+            #[cfg(feature = "cuda")]
+            {
+                let cuda_available = GpuSearchEngine::device_count() > 0;
+                if cuda_available {
+                    run_gpu_search(&args, pattern, networks);
+                } else {
+                    if !args.quiet {
+                        eprintln!("CUDA not available, falling back to OpenCL...\n");
+                    }
+                    run_opencl_search(&args, pattern, networks);
+                }
+            }
+            #[cfg(not(feature = "cuda"))]
+            {
+                run_opencl_search(&args, pattern, networks);
+            }
+        }
     } else {
         run_cpu_search(&args, pattern, networks);
     }
@@ -145,6 +185,95 @@ fn run_gpu_search(_args: &Args, _pattern: Pattern, _networks: Vec<NetworkInfo>) 
     run_gpu_search_cuda(_args, _pattern, _networks);
 }
 
+fn run_opencl_search(_args: &Args, _pattern: Pattern, _networks: Vec<NetworkInfo>) {
+    #[cfg(not(feature = "opencl"))]
+    {
+        eprintln!(
+            "Error: OpenCL support requires opencl feature. Build with: cargo build --features opencl"
+        );
+        std::process::exit(1);
+    }
+
+    #[cfg(feature = "opencl")]
+    run_opencl_search_impl(_args, _pattern, _networks);
+}
+
+#[cfg(feature = "opencl")]
+fn run_opencl_search_impl(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>) {
+    // OpenCL mode does NOT support wildcards - check and abort early
+    if pattern.fast_matcher.has_wildcards {
+        eprintln!("Error: OpenCL mode does not support wildcards in patterns.");
+        eprintln!("Pattern '{}' contains wildcards (? or *).", args.pattern);
+        eprintln!("Please use CPU mode for wildcard patterns, or use a pattern without wildcards.");
+        std::process::exit(1);
+    }
+
+    // List available platforms and devices
+    let platforms = OpenClSearchEngine::list_platforms();
+    if platforms.is_empty() {
+        eprintln!("Error: No OpenCL platforms found.");
+        std::process::exit(1);
+    }
+
+    if !args.quiet {
+        eprintln!(
+            "OpenCL Mode - {} device(s) found",
+            OpenClSearchEngine::list_devices(args.opencl_platform).len()
+        );
+        eprintln!(
+            "  Device {}: {}",
+            args.gpu_id,
+            OpenClSearchEngine::list_devices(args.opencl_platform)
+                .get(args.gpu_id.max(0) as usize)
+                .unwrap_or(&"Unknown".to_string())
+        );
+        eprintln!();
+    }
+
+    // Create OpenCL search config
+    let config = OpenClSearchConfig {
+        platform_id: args.opencl_platform,
+        device_id: args.gpu_id.max(0) as usize, // Use --gpu-id instead of separate --opencl-device
+        pattern: pattern.clone(),
+        hrp: pattern.hrp.clone(),
+        max_matches: args.max_found,
+        timeout_secs: args.timeout,
+        num_threads: if args.opencl_threads == 65536 && args.gpu_threads > 0 {
+            args.gpu_threads as usize // Use --gpu-threads if specified
+        } else {
+            args.opencl_threads
+        },
+    };
+
+    let engine = match OpenClSearchEngine::new(config) {
+        Ok(e) => e,
+        Err(err) => {
+            eprintln!("Error: Failed to initialize OpenCL: {}", err);
+            std::process::exit(1);
+        }
+    };
+
+    if !args.quiet {
+        eprintln!("GPU: {}", engine.device_name());
+        eprintln!();
+    }
+
+    let (tx, rx) = mpsc::channel();
+
+    let engine_handle = std::sync::Arc::new(engine);
+    let engine_clone = std::sync::Arc::clone(&engine_handle);
+
+    let thread_handle = std::thread::spawn(move || {
+        engine_clone.run(tx);
+    });
+
+    run_main_loop(args, rx, &*engine_handle, &networks);
+
+    // Signal stop and wait for thread to finish cleanly
+    engine_handle.stop();
+    let _ = thread_handle.join();
+}
+
 #[cfg(feature = "cuda")]
 fn run_gpu_search_cuda(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>) {
     // GPU mode does NOT support wildcards - check and abort early
@@ -163,10 +292,12 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>
     }
 
     if !args.quiet {
-        eprintln!("GPU Mode - {} device(s) found", device_count);
-        for i in 0..device_count {
-            eprintln!("  Device {}: {}", i, GpuSearchEngine::device_name(i));
-        }
+        eprintln!("CUDA Mode - {} device(s) found", device_count);
+        eprintln!(
+            "  Device {}: {}",
+            args.gpu_id,
+            GpuSearchEngine::device_name(args.gpu_id)
+        );
         eprintln!();
     }
 
@@ -176,7 +307,10 @@ fn run_gpu_search_cuda(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>
         // Default threads_per_block = 128
         let sm_count = GpuSearchEngine::device_sm_count(args.gpu_id);
         let optimal = sm_count * 8 * 128;
-        eprintln!("GPU: {} SMs, auto-configured {} threads", sm_count, optimal);
+        eprintln!("GPU: {}", GpuSearchEngine::device_name(args.gpu_id));
+        eprintln!("SM Count: {}", sm_count);
+        eprintln!("Threads: {}", optimal);
+        eprintln!();
         optimal
     } else {
         args.gpu_threads
@@ -265,6 +399,22 @@ impl SearchEngine for GpuSearchEngine {
     }
 }
 
+#[cfg(feature = "opencl")]
+impl SearchEngine for OpenClSearchEngine {
+    fn keys_checked(&self) -> u64 {
+        self.keys_checked()
+    }
+    fn matches_found(&self) -> u64 {
+        self.matches_found()
+    }
+    fn is_stopped(&self) -> bool {
+        self.is_stopped()
+    }
+    fn stop(&self) {
+        self.stop()
+    }
+}
+
 fn run_main_loop<E: SearchEngine>(
     args: &Args,
     rx: mpsc::Receiver<vanitysearch_pocx::search::Match>,
@@ -286,11 +436,19 @@ fn run_main_loop<E: SearchEngine>(
         // Check for results
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(m) => {
-                // Print just the address during search
                 if !args.quiet {
-                    // Clear current line and print found address on new line
-                    eprint!("\r{:80}\r", ""); // Clear current progress line
-                    eprintln!("  Found: {}", m.address);
+                    // Clear current line
+                    eprint!("\r{:80}\r", "");
+
+                    if args.verbose {
+                        // Print full details immediately
+                        let formatted = FormattedMatch::from_match(&m, networks);
+                        eprintln!("{}", formatted.to_text_colored(true));
+                        eprintln!();
+                    } else {
+                        // Print just the address during search
+                        eprintln!("  Found: {}", m.address);
+                    }
                 }
                 all_matches.push(m);
             }
@@ -349,26 +507,46 @@ fn run_main_loop<E: SearchEngine>(
 
     // Output all matches with full details
     if !all_matches.is_empty() {
-        if !args.quiet {
-            eprintln!();
-            eprintln!("{}", "=".repeat(85));
-            eprintln!("||{}RESULTS{}||", " ".repeat(37), " ".repeat(37));
-            eprintln!("{}", "=".repeat(85));
-            eprintln!();
-        }
+        // Only print results section if not in verbose mode (verbose already printed details)
+        if !args.verbose {
+            if !args.quiet {
+                eprintln!();
+                eprintln!("{}", "=".repeat(85));
+                eprintln!("||{}RESULTS{}||", " ".repeat(37), " ".repeat(37));
+                eprintln!("{}", "=".repeat(85));
+                eprintln!();
+            }
 
-        for m in &all_matches {
-            let formatted = FormattedMatch::from_match(m, networks);
+            for m in &all_matches {
+                let formatted = FormattedMatch::from_match(m, networks);
 
-            let output = match args.output_format.as_str() {
-                "json" => formatted.to_json(),
-                "csv" => formatted.to_csv(),
-                _ => formatted.to_text_colored(true), // Use colored output for text
-            };
+                let output = match args.output_format.as_str() {
+                    "json" => formatted.to_json(),
+                    "csv" => formatted.to_csv(),
+                    _ => formatted.to_text_colored(true), // Use colored output for text
+                };
 
-            if let Some(ref mut file) = output_file {
-                use std::io::Write;
-                // Write without colors to file
+                if let Some(ref mut file) = output_file {
+                    use std::io::Write;
+                    // Write without colors to file
+                    let file_output = match args.output_format.as_str() {
+                        "json" => formatted.to_json(),
+                        "csv" => formatted.to_csv(),
+                        _ => formatted.to_text(), // No colors for file output
+                    };
+                    writeln!(file, "{}", file_output).expect("Failed to write to output file");
+                    writeln!(file).ok();
+                } else {
+                    // Use eprintln for consistent output stream
+                    eprintln!("{}", output);
+                    eprintln!();
+                }
+            }
+        } else if let Some(ref mut file) = output_file {
+            // In verbose mode, still write to file if specified
+            use std::io::Write;
+            for m in &all_matches {
+                let formatted = FormattedMatch::from_match(m, networks);
                 let file_output = match args.output_format.as_str() {
                     "json" => formatted.to_json(),
                     "csv" => formatted.to_csv(),
@@ -376,10 +554,6 @@ fn run_main_loop<E: SearchEngine>(
                 };
                 writeln!(file, "{}", file_output).expect("Failed to write to output file");
                 writeln!(file).ok();
-            } else {
-                // Use eprintln for consistent output stream
-                eprintln!("{}", output);
-                eprintln!();
             }
         }
     }

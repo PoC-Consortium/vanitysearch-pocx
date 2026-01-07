@@ -13,6 +13,10 @@ fn main() {
     println!("cargo:rerun-if-changed=cuda/GPUMath.h");
     println!("cargo:rerun-if-changed=cuda/GPUHash.h");
     println!("cargo:rerun-if-changed=cuda/GPUGroup.h");
+    println!("cargo:rerun-if-changed=opencl/bech32_kernel.cl");
+    println!("cargo:rerun-if-changed=opencl/group.cl");
+    println!("cargo:rerun-if-changed=opencl/hash.cl");
+    println!("cargo:rerun-if-changed=opencl/math.cl");
     println!("cargo:rerun-if-changed=build.rs");
 }
 

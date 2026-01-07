@@ -18,3 +18,5 @@ pub use pattern::Pattern;
 pub use search::{CpuSearchConfig, CpuSearchEngine, Match};
 #[cfg(feature = "cuda")]
 pub use search::{GpuSearchConfig, GpuSearchEngine};
+#[cfg(feature = "opencl")]
+pub use search::{OpenClSearchConfig, OpenClSearchEngine};

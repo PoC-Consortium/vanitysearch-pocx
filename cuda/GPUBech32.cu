@@ -103,19 +103,7 @@ int cuda_bech32_init(int deviceId) {
         return -1;
     }
     
-    // Get device properties
-    cudaDeviceProp prop;
-    err = cudaGetDeviceProperties(&prop, deviceId);
-    if (err != cudaSuccess) {
-        printf("CUDA Error: Failed to get device properties: %s\n", cudaGetErrorString(err));
-        return -1;
-    }
-    
-    printf("GPU: %s\n", prop.name);
-    printf("  SM Count: %d\n", prop.multiProcessorCount);
-    printf("  Memory: %.1f GB\n", prop.totalGlobalMem / (1024.0 * 1024.0 * 1024.0));
-    printf("  Compute Capability: %d.%d\n", prop.major, prop.minor);
-    
+    // Device is set successfully
     return 0;
 }
 

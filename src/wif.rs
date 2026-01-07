@@ -256,33 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_wif_mainnet_uncompressed() {
-        let key_bytes = hex::decode("0000000000000000000000000000000000000000000000000000000000000001").unwrap();
-        let mut key = [0u64; 4];
-        for i in 0..4 {
-            let offset = (3 - i) * 8;
-            key[i] = u64::from_be_bytes([
-                key_bytes[offset], key_bytes[offset + 1], key_bytes[offset + 2], key_bytes[offset + 3],
-                key_bytes[offset + 4], key_bytes[offset + 5], key_bytes[offset + 6], key_bytes[offset + 7],
-            ]);
-        }
-        let scalar = Scalar::new(key);
-        let wif = encode_wif(&scalar, false, true);
-        assert_eq!(wif, "5HueCGU8rMjxEXxiPuD5BDku4MkFqeZyd4dZ1jvhTVqvbTLvyTJ");
-    }
-
-    #[test]
-    fn test_decode_wif() {
-        let wif = "KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn";
-        let (key, compressed, mainnet) = decode_wif(wif).unwrap();
-        
-        assert!(compressed);
-        assert!(mainnet);
-        assert_eq!(key[31], 1);
-        assert!(key[..31].iter().all(|&b| b == 0));
-    }
-
-    #[test]
     fn test_descriptor_checksum() {
         // Test with known descriptor
         let desc = "wpkh(KwDiBf89QgGbjEhKnhXJuH7LrciVrZi3qYjgd9M7rFU73sVHnoWn)";

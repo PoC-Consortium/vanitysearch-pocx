@@ -159,21 +159,29 @@ pub struct Pattern {
 impl Pattern {
     /// Create a new pattern from string
     pub fn new(pattern: &str) -> Result<Self, PatternError> {
-        let pattern = pattern.to_lowercase();
+        let pattern_lower = pattern.to_lowercase();
 
         // Validate pattern format
-        if pattern.len() < 4 {
+        if pattern_lower.len() < 1 {
             return Err(PatternError::TooShort);
         }
 
-        // Find HRP separator
-        let sep_pos = pattern.find('1').ok_or(PatternError::NoSeparator)?;
-        if sep_pos < 1 {
-            return Err(PatternError::InvalidHrp);
-        }
-
-        let hrp = pattern[..sep_pos].to_string();
-        let data_pattern = pattern[sep_pos + 1..].to_string();
+        // Find HRP separator - if not present, assume user just provided the search pattern
+        // and automatically prefix with "pocx1q"
+        let (hrp, data_pattern, full_pattern) = if let Some(sep_pos) = pattern_lower.find('1') {
+            if sep_pos < 1 {
+                return Err(PatternError::InvalidHrp);
+            }
+            (
+                pattern_lower[..sep_pos].to_string(),
+                pattern_lower[sep_pos + 1..].to_string(),
+                pattern_lower.clone(),
+            )
+        } else {
+            // No separator found - prefix with "pocx1q" automatically
+            let full = format!("pocx1q{}", pattern_lower);
+            ("pocx".to_string(), format!("q{}", pattern_lower), full)
+        };
 
         // Validate HRP
         if !hrp.chars().all(|c| c.is_ascii_lowercase()) {
@@ -216,7 +224,7 @@ impl Pattern {
         let fast_matcher = FastPrefixMatcher::new(&data_pattern);
 
         Ok(Self {
-            pattern,
+            pattern: full_pattern,
             hrp,
             data_pattern: data_pattern.clone(),
             is_full,
