@@ -14,7 +14,7 @@ use vanitysearch_pocx::{OpenClSearchConfig, OpenClSearchEngine};
 #[derive(Parser, Debug)]
 #[command(name = "vanitysearch-pocx")]
 #[command(author = "EviLSeeD")]
-#[command(version = "0.5.2")]
+#[command(version = "0.5.3")]
 #[command(about = "Bitcoin bech32 vanity address generator", long_about = None)]
 struct Args {
     /// Pattern to search for (e.g., bc1qmadf0*)

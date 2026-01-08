@@ -51,8 +51,8 @@ fn detect_cuda_version(cuda_path: &str) -> u32 {
         }
     }
 
-    // Default to 13.1
-    13_010
+    // Default to 12.6
+    12_060
 }
 
 #[cfg(feature = "cuda")]
@@ -60,7 +60,7 @@ fn build_cuda() {
     use std::path::PathBuf;
 
     let cuda_path = env::var("CUDA_PATH").unwrap_or_else(|_| {
-        "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v13.1".to_string()
+        "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6".to_string()
     });
 
     let cuda_lib = PathBuf::from(&cuda_path).join("lib\\x64");
