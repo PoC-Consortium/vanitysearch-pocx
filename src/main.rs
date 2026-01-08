@@ -13,7 +13,7 @@ use vanitysearch_pocx::{OpenClSearchConfig, OpenClSearchEngine};
 
 #[derive(Parser, Debug)]
 #[command(name = "vanitysearch-pocx")]
-#[command(author = "VanitySearch-POCX Contributors")]
+#[command(author = "EviLSeeD")]
 #[command(version = "0.5.2")]
 #[command(about = "Bitcoin bech32 vanity address generator", long_about = None)]
 struct Args {
