@@ -5,9 +5,9 @@
 mod cuda_impl {
     use crate::pattern::Pattern;
     use crate::search::Match;
-    use crate::secp256k1::{Point, Scalar, G};
-    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use crate::secp256k1::{G, Point, Scalar};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
     // Constants matching VanitySearch
     const STEP_SIZE: usize = 16384; // Keys per thread per kernel launch
@@ -19,7 +19,7 @@ mod cuda_impl {
         _private: [u8; 0],
     }
 
-    extern "C" {
+    unsafe extern "C" {
         fn cuda_bech32_get_device_count() -> i32;
         fn cuda_bech32_get_device_name(device_id: i32, name: *mut i8, max_len: i32);
         fn cuda_bech32_get_device_sm_count(device_id: i32) -> i32;

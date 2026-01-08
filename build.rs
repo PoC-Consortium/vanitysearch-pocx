@@ -79,12 +79,12 @@ fn build_cuda() {
         // sm_75: Turing (RTX 20xx)
         // sm_86: Ampere (RTX 30xx)
         // sm_89: Ada Lovelace (RTX 40xx)
-        // sm_120: Blackwell (RTX 50xx)
+        // Note: sm_120 (Blackwell/RTX 50xx) requires CUDA 12.6+, excluded for compatibility
         let bat_script = format!(
             r#"@echo off
 call "{}"
 if errorlevel 1 exit /b 1
-nvcc -c cuda\GPUBech32.cu -o "{}" --generate-code arch=compute_75,code=sm_75 --generate-code arch=compute_86,code=sm_86 --generate-code arch=compute_89,code=sm_89 --generate-code arch=compute_120,code=sm_120 -I "{}" -I cuda -O3 --compiler-options /MD -allow-unsupported-compiler
+nvcc -c cuda\GPUBech32.cu -o "{}" --generate-code arch=compute_75,code=sm_75 --generate-code arch=compute_86,code=sm_86 --generate-code arch=compute_89,code=sm_89 -I "{}" -I cuda -O3 --compiler-options /MD -allow-unsupported-compiler
 "#,
             vcvars_str,
             obj_file,
@@ -113,8 +113,6 @@ nvcc -c cuda\GPUBech32.cu -o "{}" --generate-code arch=compute_75,code=sm_75 --g
                 "arch=compute_86,code=sm_86",
                 "--generate-code",
                 "arch=compute_89,code=sm_89",
-                "--generate-code",
-                "arch=compute_120,code=sm_120",
                 "-I",
                 cuda_include.to_str().unwrap(),
                 "-I",

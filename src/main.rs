@@ -172,6 +172,7 @@ fn run_cpu_search(args: &Args, pattern: Pattern, networks: Vec<NetworkInfo>) {
     run_main_loop(args, rx, &*engine_handle, &networks);
 }
 
+#[allow(dead_code)]
 fn run_gpu_search(_args: &Args, _pattern: Pattern, _networks: Vec<NetworkInfo>) {
     #[cfg(not(feature = "cuda"))]
     {
