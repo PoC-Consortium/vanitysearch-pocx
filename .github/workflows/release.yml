@@ -44,7 +44,7 @@ jobs:
       - name: Install CUDA Toolkit
         run: |
           wget https://developer.download.nvidia.com/compute/cuda/13.1.0/local_installers/cuda_13.1.0_590.44.01_linux.run
-          sudo sh cuda_13.1.0_590.44.01_linux.run --silent --toolkit
+          sudo sh cuda_13.1.0_590.44.01_linux.run --silent --toolkit --no-man-page --no-drm --override
           echo "CUDA_HOME=/usr/local/cuda-13.1" >> $GITHUB_ENV
           echo "/usr/local/cuda-13.1/bin" >> $GITHUB_PATH
           echo "LD_LIBRARY_PATH=/usr/local/cuda-13.1/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" >> $GITHUB_ENV
