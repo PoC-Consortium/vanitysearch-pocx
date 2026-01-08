@@ -1,6 +1,6 @@
 [package]
 name = "vanitysearch-pocx"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 authors = ["VanitySearch-POCX Contributors"]
 description = "Bech32 vanity address generator with GPU support (CUDA/OpenCL)"
