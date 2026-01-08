@@ -29,7 +29,7 @@ fn detect_cuda_version(cuda_path: &str) -> u32 {
     let nvcc = PathBuf::from(cuda_path).join("bin").join("nvcc.exe");
     #[cfg(not(target_os = "windows"))]
     let nvcc = PathBuf::from(cuda_path).join("bin").join("nvcc");
-    
+
     if let Ok(output) = std::process::Command::new(nvcc).arg("--version").output() {
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -46,7 +46,11 @@ fn detect_cuda_version(cuda_path: &str) -> u32 {
     }
 
     // Fallback: try to infer from path (v12.6, v13.1, etc.)
-    let version_search = if cfg!(target_os = "windows") { "\\v" } else { "/v" };
+    let version_search = if cfg!(target_os = "windows") {
+        "\\v"
+    } else {
+        "/v"
+    };
     if let Some(idx) = cuda_path.rfind(version_search) {
         let version_str = &cuda_path[idx + 2..];
         if let Some((major, minor)) = version_str.split_once('.') {
@@ -64,20 +68,22 @@ fn detect_cuda_version(cuda_path: &str) -> u32 {
 fn build_cuda() {
     use std::path::PathBuf;
 
-    let cuda_path = env::var("CUDA_PATH").or_else(|_| env::var("CUDA_HOME")).unwrap_or_else(|_| {
-        if cfg!(target_os = "windows") {
-            "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6".to_string()
-        } else {
-            "/usr/local/cuda".to_string()
-        }
-    });
+    let cuda_path = env::var("CUDA_PATH")
+        .or_else(|_| env::var("CUDA_HOME"))
+        .unwrap_or_else(|_| {
+            if cfg!(target_os = "windows") {
+                "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6".to_string()
+            } else {
+                "/usr/local/cuda".to_string()
+            }
+        });
 
     let cuda_lib = if cfg!(target_os = "windows") {
         PathBuf::from(&cuda_path).join("lib").join("x64")
     } else {
         PathBuf::from(&cuda_path).join("lib64")
     };
-    
+
     let cuda_include = PathBuf::from(&cuda_path).join("include");
 
     // Link CUDA libraries
@@ -87,7 +93,7 @@ fn build_cuda() {
 
     // Detect CUDA version
     let cuda_version = detect_cuda_version(&cuda_path);
-    let supports_sm120 = cuda_version >= 12_006; // CUDA 12.6+
+    let supports_sm120 = cuda_version >= 13_010; // CUDA 13.1+
 
     eprintln!(
         "Detected CUDA version: {}.{}",
@@ -102,15 +108,27 @@ fn build_cuda() {
 
     // Compile CUDA kernel (GPUBech32.cu which uses original VanitySearch headers)
     let out_dir = env::var("OUT_DIR").unwrap();
-    
+
     #[cfg(target_os = "windows")]
     {
-        build_cuda_windows(&cuda_path, &cuda_include, &out_dir, cuda_version, supports_sm120);
+        build_cuda_windows(
+            &cuda_path,
+            &cuda_include,
+            &out_dir,
+            cuda_version,
+            supports_sm120,
+        );
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
-        build_cuda_linux(&cuda_path, &cuda_include, &out_dir, cuda_version, supports_sm120);
+        build_cuda_linux(
+            &cuda_path,
+            &cuda_include,
+            &out_dir,
+            cuda_version,
+            supports_sm120,
+        );
     }
 
     println!("cargo:rustc-link-search=native={}", out_dir);
@@ -118,9 +136,15 @@ fn build_cuda() {
 }
 
 #[cfg(all(feature = "cuda", target_os = "windows"))]
-fn build_cuda_windows(cuda_path: &str, cuda_include: &std::path::Path, out_dir: &str, cuda_version: u32, supports_sm120: bool) {
+fn build_cuda_windows(
+    cuda_path: &str,
+    cuda_include: &std::path::Path,
+    out_dir: &str,
+    _cuda_version: u32,
+    supports_sm120: bool,
+) {
     use std::path::PathBuf;
-    
+
     let obj_file = format!("{}/GPUBech32.o", out_dir);
     let lib_file = format!("{}/GPUBech32.lib", out_dir);
 
@@ -144,7 +168,11 @@ fn build_cuda_windows(cuda_path: &str, cuda_include: &std::path::Path, out_dir: 
         if output.status.success() {
             let vs_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !vs_path.is_empty() {
-                let vcvars = PathBuf::from(&vs_path).join("VC").join("Auxiliary").join("Build").join("vcvars64.bat");
+                let vcvars = PathBuf::from(&vs_path)
+                    .join("VC")
+                    .join("Auxiliary")
+                    .join("Build")
+                    .join("vcvars64.bat");
                 if vcvars.exists() {
                     vcvars_path = Some(vcvars);
                 }
@@ -271,7 +299,13 @@ lib /OUT:"{}" "{}"
 }
 
 #[cfg(all(feature = "cuda", not(target_os = "windows")))]
-fn build_cuda_linux(_cuda_path: &str, cuda_include: &std::path::Path, out_dir: &str, _cuda_version: u32, supports_sm120: bool) {
+fn build_cuda_linux(
+    _cuda_path: &str,
+    cuda_include: &std::path::Path,
+    out_dir: &str,
+    _cuda_version: u32,
+    supports_sm120: bool,
+) {
     let obj_file = format!("{}/GPUBech32.o", out_dir);
     let lib_file = format!("{}/libGPUBech32.a", out_dir);
 
@@ -291,16 +325,11 @@ fn build_cuda_linux(_cuda_path: &str, cuda_include: &std::path::Path, out_dir: &
     }
 
     // Compile CUDA kernel
-    let mut nvcc_args = vec![
-        "-c",
-        "cuda/GPUBech32.cu",
-        "-o",
-        &obj_file,
-    ];
-    
+    let mut nvcc_args = vec!["-c", "cuda/GPUBech32.cu", "-o", &obj_file];
+
     let arch_flags_refs: Vec<&str> = arch_flags.iter().map(|s| s.as_str()).collect();
     nvcc_args.extend(arch_flags_refs);
-    
+
     nvcc_args.extend(&[
         "-I",
         cuda_include.to_str().unwrap(),
@@ -351,7 +380,7 @@ fn build_cuda_linux(_cuda_path: &str, cuda_include: &std::path::Path, out_dir: &
             panic!("Failed to create static library");
         }
     }
-    
+
     // Tell Rust to link against C++ standard library
     println!("cargo:rustc-link-lib=stdc++");
 }

@@ -2,7 +2,7 @@
 # Supports NVIDIA (CUDA/OpenCL), AMD (OpenCL), and Intel (OpenCL) GPUs
 
 # Stage 1: Build stage with CUDA toolkit
-FROM nvidia/cuda:12.2.0-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:13.1.0-devel-ubuntu22.04 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -30,7 +30,7 @@ COPY opencl ./opencl
 RUN cargo build --release --features cuda,opencl
 
 # Stage 2: Runtime stage with minimal CUDA runtime and OpenCL
-FROM nvidia/cuda:12.2.0-runtime-ubuntu22.04
+FROM nvidia/cuda:13.1.0-runtime-ubuntu22.04
 
 # Install OpenCL ICD loader and drivers
 RUN apt-get update && apt-get install -y \

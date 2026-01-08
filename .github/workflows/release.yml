@@ -114,8 +114,8 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Build Release (OpenCL only)
-        run: cargo build --release --no-default-features --features opencl
+      - name: Build Release (CPU only - CUDA/OpenCL not available on macOS)
+        run: cargo build --release --no-default-features
 
       - name: Strip Binary
         run: strip target/release/vanitysearch-pocx
