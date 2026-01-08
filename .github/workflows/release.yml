@@ -44,7 +44,7 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
-          cuda: '13.1.0'
+          cuda: '12.6.0' # maybe fix for error in git runner
 
       - name: Install OpenCL
         run: |
