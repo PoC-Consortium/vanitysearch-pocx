@@ -17,7 +17,6 @@ jobs:
     name: Create Release
     runs-on: ubuntu-latest
     outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
     steps:
       - name: Get version from tag
@@ -26,14 +25,14 @@ jobs:
 
       - name: Create Release
         id: create_release
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease:  false
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
 
   build-linux:
     name: Build Linux
@@ -69,14 +68,11 @@ jobs:
           tar czf vanitysearch-pocx-${{ needs.create-release.outputs.version }}-linux-x86_64.tar.gz vanitysearch-pocx
 
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ./target/release/vanitysearch-pocx-${{ needs. create-release.outputs.version }}-linux-x86_64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./target/release/vanitysearch-pocx-${{ needs.create-release.outputs.version }}-linux-x86_64.tar.gz
-          asset_name: vanitysearch-pocx-${{ needs.create-release.outputs.version }}-linux-x86_64.tar.gz
-          asset_content_type: application/gzip
 
   build-windows:
     name: Build Windows
@@ -104,14 +100,11 @@ jobs:
           7z a vanitysearch-pocx-${{ needs.create-release.outputs.version }}-windows-x86_64.zip vanitysearch-pocx.exe
 
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with: 
+          files: ./target/release/vanitysearch-pocx-${{ needs.create-release. outputs.version }}-windows-x86_64.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./target/release/vanitysearch-pocx-${{ needs.create-release.outputs.version }}-windows-x86_64.zip
-          asset_name: vanitysearch-pocx-${{ needs.create-release.outputs.version }}-windows-x86_64.zip
-          asset_content_type: application/zip
+          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
 
   build-macos:
     name: Build macOS
@@ -137,14 +130,11 @@ jobs:
           tar czf vanitysearch-pocx-${{ needs.create-release.outputs.version }}-macos-x86_64.tar.gz vanitysearch-pocx
 
       - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
+        uses: softprops/action-gh-release@v1
+        with: 
+          files: ./target/release/vanitysearch-pocx-${{ needs.create-release. outputs.version }}-macos-x86_64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: ./target/release/vanitysearch-pocx-${{ needs.create-release.outputs.version }}-macos-x86_64.tar.gz
-          asset_name: vanitysearch-pocx-${{ needs.create-release.outputs.version }}-macos-x86_64.tar.gz
-          asset_content_type: application/gzip
 
   build-docker:
     name: Build and Push Docker Images
