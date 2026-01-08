@@ -44,7 +44,7 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.11
         with:
-          cuda: '12.2.0'
+          cuda: '13.1.0'
 
       - name: Install OpenCL
         run: |
@@ -84,7 +84,7 @@ jobs:
       - name: Install CUDA Toolkit
         uses: Jimver/cuda-toolkit@v0.2.11
         with:
-          cuda: '12.2.0'
+          cuda: '13.1.0'
 
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
