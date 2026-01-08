@@ -351,6 +351,9 @@ fn build_cuda_linux(_cuda_path: &str, cuda_include: &std::path::Path, out_dir: &
             panic!("Failed to create static library");
         }
     }
+    
+    // Tell Rust to link against C++ standard library
+    println!("cargo:rustc-link-lib=stdc++");
 }
 
 #[cfg(not(feature = "cuda"))]
