@@ -18,9 +18,9 @@ High-performance bech32 vanity address generator with GPU acceleration. Generate
 
 This tool works with **any bech32-encoded cryptocurrency**:
 
+- **POCX**: `pocx1q...` (mainnet), `tpocx1q...` (testnet)
 - **Bitcoin**: `bc1q...` (mainnet), `tb1q...` (testnet)
 - **Litecoin**: `ltc1q...` (mainnet), `tltc1q...` (testnet)
-- **POCX**: `pocx1q...` (mainnet), `tpocx1q...` (testnet)
 - **Any other bech32 coin**: Just specify the HRP (human-readable part)
 
 The pattern you search for will include the HRP automatically based on network detection.
@@ -29,8 +29,8 @@ The pattern you search for will include the HRP automatically based on network d
 
 | Mode | Speed | Platform |
 |------|-------|----------|
-| CUDA | 12 GKey/s | NVIDIA RTX 5090 |
-| OpenCL | 6.6 GKey/s | NVIDIA RTX 5090 |
+| CUDA | 12.5 GKey/s | NVIDIA RTX 5090 |
+| OpenCL | 8.6 GKey/s | NVIDIA RTX 5090 |
 | CPU (no wildcards) | 66 MKey/s | Multi-core CPU |
 | CPU (wildcards) | 65 MKey/s | Multi-core CPU |
 
