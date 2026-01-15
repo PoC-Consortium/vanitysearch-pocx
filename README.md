@@ -278,7 +278,7 @@ docker run --gpus all vanitysearch-pocx:local "test" -g -v -m 1
 **OpenCL** (Cross-platform):
 - ✅ Works on AMD, Intel, and NVIDIA GPUs
 - ✅ Single codebase for all vendors
-- ⚠️ ~55% of CUDA performance on NVIDIA (due to Fermat inverse overhead)
+- ⚠️ ~69% of CUDA performance on NVIDIA (due to Fermat inverse overhead)
 - 🔮 May perform better on native AMD/Intel OpenCL implementations
 
 ### GPU Limitations
