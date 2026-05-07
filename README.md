@@ -1,5 +1,8 @@
 # VanitySearch-POCX
 
+> [!WARNING]
+> There a reports that some keys resolve to a different address. Please verify your key against your node before plotting!
+
 High-performance bech32 vanity address generator with GPU acceleration. Generate custom addresses with specific prefixes for **any blockchain using bech32 encoding** (Bitcoin, Litecoin, POCX, etc).
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
