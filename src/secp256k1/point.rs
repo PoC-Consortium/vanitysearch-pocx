@@ -62,9 +62,9 @@ pub const LAMBDA: Scalar = Scalar { d: [
 ]};
 
 pub const LAMBDA2: Scalar = Scalar { d: [
-    0xE0CFD10B51283CE0,
-    0x8EC739C2E0CFC810,
-    0x3FA3CF1F5AD9E3FD,
+    0xE0CFC810B51283CE,
+    0xA880B9FC8EC739C2,
+    0x5AD9E3FD77ED9BA4,
     0xAC9C52B33FA3CF1F,
 ]};
 
