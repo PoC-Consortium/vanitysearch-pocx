@@ -1,7 +1,4 @@
-# VanitySearch-POCX
-
-> [!WARNING]
-> There are reports that some keys resolve to a different address than displayed in the output. Please verify your key against your node before using it!
+﻿# VanitySearch-POCX
 
 High-performance bech32 vanity address generator with GPU acceleration. Generate custom addresses with specific prefixes for **any blockchain using bech32 encoding** (Bitcoin, Litecoin, POCX, etc).
 
@@ -17,16 +14,18 @@ High-performance bech32 vanity address generator with GPU acceleration. Generate
 - 🎨 **Colored Output**: Easy-to-read terminal output with syntax highlighting
 - 🐳 **Docker Ready**: Pre-built images with CUDA/OpenCL support
 
-## Supported Networks
+## How it Works / Supported Networks
 
-This tool works with **any bech32-encoded cryptocurrency**:
+This tool works with **any bech32-encoded cryptocurrency**. By default, the generator creates addresses for **POCX**. 
 
-- **POCX**: `pocx1q...` (mainnet), `tpocx1q...` (testnet)
-- **Bitcoin**: `bc1q...` (mainnet), `tb1q...` (testnet)
-- **Litecoin**: `ltc1q...` (mainnet), `tltc1q...` (testnet)
-- **Any other bech32 coin**: Just specify the HRP (human-readable part)
+Your search pattern matches the characters *immediately after* the prefix:
+- **POCX**: `pocx1q...` (mainnet) or `tpocx1q...` (testnet)
+- **Bitcoin**: `bc1q...` (mainnet) or `tb1q...` (testnet)
 
-The pattern you search for will include the HRP automatically based on network detection.
+*Example:* If you search for `test`, you'll find addresses starting with `pocx1qtest...`.
+
+**Valid characters**: `qpzry9x8gf2tvdw0s3jn54khce6mua7l` (bech32 charset, lowercase only).
+*(Characters like `1`, `b`, `i`, `o` are **not** supported!)*
 
 ## Performance
 
@@ -95,14 +94,11 @@ The compiled binary will be at `target/release/vanitysearch-pocx` (or `.exe` on 
 # CPU mode - find 1 address starting with "pocx1qevlseed"
 vanitysearch-pocx "evlseed" -v -m 1
 
-# GPU mode - auto-detects CUDA, falls back to OpenCL
+# GPU mode (Fastest) - auto-detects CUDA, falls back to OpenCL
 vanitysearch-pocx "evlseed" -g -v -m 1
 
-# Force OpenCL mode (useful for NVIDIA cards to test OpenCL)
-vanitysearch-pocx "evlseed" --opencl -v -m 1
-
-# With wildcards (CPU only) - "evlseed" anywhere in the address (could be at end in checksum, provide HRP prefix in this case)
-vanitysearch-pocx "pocx1q*evlseed*" -v -m 1
+# With wildcards (CPU only) - find "test" at any position
+vanitysearch-pocx "pocx1q*test*" -v -m 1
 
 # Wildcards - any 3 chars then "test"
 vanitysearch-pocx "???test*" -v -m 1
@@ -110,11 +106,8 @@ vanitysearch-pocx "???test*" -v -m 1
 # With 60 second timeout, output every found address asap (-v)
 vanitysearch-pocx "evlseed" -v -T 60
 
-# Find multiple matches
+# Find 5 matches
 vanitysearch-pocx "evlseed" -v -m 5
-
-# Default mode - shows addresses during search, full details at end
-vanitysearch-pocx "evlseed" -T 10
 ```
 
 ### Command-Line Options
