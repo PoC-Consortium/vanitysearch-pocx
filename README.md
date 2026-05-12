@@ -33,8 +33,8 @@ Your search pattern matches the characters *immediately after* the prefix:
 |------|-------|----------|
 | CUDA | 12.5 GKey/s | NVIDIA RTX 5090 |
 | OpenCL | 8.6 GKey/s | NVIDIA RTX 5090 |
-| CPU (no wildcards) | 66 MKey/s | Multi-core CPU |
-| CPU (wildcards) | 65 MKey/s | Multi-core CPU |
+| CPU (no wildcards) | 66 MKey/s | Ryzen 7 9800x3d |
+| CPU (wildcards) | 65 MKey/s | Ryzen 7 9800x3d |
 
 ## Installation
 
